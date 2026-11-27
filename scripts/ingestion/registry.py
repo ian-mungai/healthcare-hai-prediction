@@ -5,7 +5,9 @@
 nothing in the live pipeline calls it: it reads files and writes only ``registry.lock.json`` (``lock``) and ``unit_golden.json`` (``golden``).
 
 Both commands derive the bronze scope from the checked tree's own dbt project (``scripts.ingestion.scope``). A supplied scope report is only compared with the
-derived one: a difference is an I1 problem and a report that is no JSON object is an I2 problem. The schemas are the checked tree's own.
+derived one: a difference is an I1 problem, and a report that cannot be read or is no JSON object is an I2 problem. The schemas are the checked tree's own.
+
+The READINESS block is computed when the queue, the table map and the derived scope are the locked ones. No other file and no other failure removes it.
 
 Commands (the exit code is 0 for a pass, 1 for named problems and 2 when the check cannot run)::
 
@@ -22,6 +24,7 @@ The end-to-end run of the committed files and of one failing mutation per integr
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -50,7 +53,7 @@ from scripts.acquisition.source_registry import RegistryError
 from scripts.infrastructure import startup_check
 from scripts.ingestion import registry_readiness, scope
 from scripts.ingestion import registry_records as records
-from scripts.ingestion.registry_model import MANUAL_ROUTE, Output, Problem, RegistryFileError, Result, Tree, canonical, default_scope, sha256_bytes
+from scripts.ingestion.registry_model import MANUAL_ROUTE, NEEDS, Output, Problem, RegistryFileError, Result, Tree, canonical, default_scope, sha256_bytes
 from scripts.lakehouse import bronze, dbt_package_archive
 from scripts.quality import dbt_manifest_labels
 
@@ -82,8 +85,23 @@ NOT_PARSE_INPUTS = frozenset({"dbt_packages", "target", "logs"})
 PARSED: dict[str, bytes] = {}
 # No scope report was supplied. None is a supplied value: a report that is the JSON null.
 NOT_SUPPLIED: Any = object()
+# A scope report was supplied and its file cannot be read.
+UNREADABLE_REPORT: Any = object()
 # What reading inputs of a wrong shape raises.
-INPUT_ERRORS = (RegistryFileError, scope.ScopeError, capture_mode.SpecError, AttributeError, KeyError, TypeError, ValueError)
+INPUT_ERRORS = (
+    RegistryFileError,
+    scope.ScopeError,
+    capture_mode.SpecError,
+    AttributeError,
+    LookupError,
+    TypeError,
+    ValueError,
+    ArithmeticError,
+    RecursionError,
+    OSError,
+)
+# What stops a command that cannot run at all.
+CANNOT_RUN = (*INPUT_ERRORS, dbt_manifest_labels.ManifestError, dbt_package_archive.ArchiveError)
 FROZEN = (TABLE_MAP, RETIRED_OBJECTS, LEAVING_RECORD, LAYOUT, SOURCE_REGISTRY, SEED_MANIFEST)
 STEP = re.compile(r"S(?:0|1|2|3|4|5|6a|6b|7|8|8a|9|10|11|12|13a|13b|14)")
 STEP_LIST = re.compile(rf"{STEP.pattern}(?:, {STEP.pattern})*")
@@ -142,10 +160,18 @@ def encode(document: Mapping[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
 
 
+def unrepeated(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A JSON object with each key once: the parser would keep the last of two and hide the other."""
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise ValueError("an object repeats a key")
+    return found
+
+
 def read_json(root: Path, relative: str) -> Any:
-    """A file of the tree parsed as JSON; a missing, unreadable or malformed file is a RegistryFileError naming it."""
+    """A file of the tree parsed as JSON; a missing, unreadable or malformed file, or one that repeats a key, is a RegistryFileError naming it."""
     try:
-        return json.loads((root / relative).read_bytes())
+        return json.loads((root / relative).read_bytes(), object_pairs_hook=unrepeated)
     except OSError as error:
         raise RegistryFileError(f"{relative} cannot be read: {error.strerror or type(error).__name__}") from error
     except (ValueError, RecursionError) as error:
@@ -178,9 +204,12 @@ def derived_scope(root: Path) -> dict[str, Any]:
 
 
 def read_supplied(path: Path) -> Any:
-    """The value of a supplied scope report. Text that is not JSON reads as None, which the comparison refuses as no JSON object."""
+    """The value of a supplied scope report. Text that is not JSON reads as None, which the comparison refuses as no JSON object, and a file that cannot be
+    read is UNREADABLE_REPORT, which it refuses by name."""
     try:
         return json.loads(path.read_bytes())
+    except OSError:
+        return UNREADABLE_REPORT
     except (ValueError, RecursionError):
         return None
 
@@ -189,6 +218,8 @@ def supplied_scope_problems(derived: Mapping[str, Any], supplied: Any) -> list[P
     """A supplied scope report is compared with the derived one and never used: a difference is an I1 problem."""
     if supplied is NOT_SUPPLIED:
         return []
+    if supplied is UNREADABLE_REPORT:
+        return [Problem("I2", "scope report", "cannot be read")]
     if not isinstance(supplied, Mapping):
         return [Problem("I2", "scope report", "is not a JSON object")]
     try:
@@ -210,10 +241,14 @@ def runtime_plans() -> list[str]:
     return sorted({path.relative_to(ROOT).as_posix() for path in paths})
 
 
+def schema_path(name: str) -> str:
+    return f"{SCHEMAS}/{name}.schema.json"
+
+
 def bound_paths(root: Path) -> list[str]:
     """Every file the lock binds: the authored files and schemas, the frozen inputs, the baseline run, and the runtime's and the classified plans, each with
-    its companion lock. A plan or a lock is bound whether or not the tree holds it, so a missing one fails by name."""
-    found = {*AUTHORED.values(), *FROZEN}
+    its companion lock. A required schema, a plan or a lock is bound whether or not the tree holds it, so a missing one fails by name."""
+    found = {*AUTHORED.values(), *FROZEN, *map(schema_path, records.REQUIRED_SCHEMAS)}
     for folder in (SCHEMAS, BASELINE):
         found.update(path.relative_to(root).as_posix() for path in (root / folder).rglob("*") if path.is_file())
     for plan in runtime_plans():
@@ -233,7 +268,7 @@ def load_lock(root: Path, schemas: records.Schemas) -> tuple[dict[str, Any] | No
     except RegistryFileError as error:
         text = f"{LOCK} is missing: run the lock command" if not (root / LOCK).exists() else str(error)
         return None, [Problem("lock", LOCK, text)]
-    errors = schema_errors(schemas, "registry_lock", lock)
+    errors = schema_errors(schemas, "registry_lock", lock) or schemas.needs_errors("registry_lock", lock)
     return (None, [Problem("I2", LOCK, text) for text in errors]) if errors else (lock, [])
 
 
@@ -253,9 +288,11 @@ def lock_files(lock: Mapping[str, Any]) -> dict[str, str]:
 def lock_problems(root: Path, schemas: records.Schemas | None = None) -> list[Problem]:
     """I1: each bound file's SHA-256 equals its lock entry, the lock binds exactly the bound set, lists each file once and names the source registry it binds
     as its parent."""
-    lock, problems = load_lock(root, schemas or records.Schemas(root))
+    schemas = schemas or records.Schemas(root)
+    lock, problems = load_lock(root, schemas)
     if lock is None:
-        return problems
+        missing = [Problem("I1", name, "is a required schema the tree does not hold") for name in map(schema_path, records.REQUIRED_SCHEMAS)]
+        return [problem for problem in missing if not (root / problem.subject).is_file()] + problems + draft_problems(root, schemas)
     wanted, bound = set(bound_paths(root)), lock_files(lock)
     listed = [row["path"] for row in lock["files"]]
     problems += [Problem("I1", name, "is listed by the lock more than once") for name in sorted({name for name in listed if listed.count(name) > 1})]
@@ -269,17 +306,33 @@ def lock_problems(root: Path, schemas: records.Schemas | None = None) -> list[Pr
     for name in sorted(wanted & set(bound)):
         try:
             actual = sha256_bytes((root / name).read_bytes())
-        except OSError:
+        except (OSError, ValueError):
             problems.append(Problem("I1", name, "is bound by the lock but cannot be read"))
             continue
         if actual != bound[name]:
             problems.append(Problem("I1", name, f"differs from the lock (lock {bound[name][:12]}, file {actual[:12]})"))
+    return problems + draft_problems(root, schemas) if problems else problems
+
+
+def draft_problems(root: Path, schemas: records.Schemas) -> list[Problem]:
+    """I2 for a tree whose lock does not bind it, where the other predicates do not run: each authored draft that lacks what its readers need. A draft that
+    cannot be read at all is named by its own binding."""
+    problems: list[Problem] = []
+    for name, relative in AUTHORED.items():
+        if name not in NEEDS:
+            continue
+        try:
+            document = read_json(root, relative)
+        except RegistryFileError:
+            continue
+        predicate = "I12" if name == "layout_contracts" else "I2"
+        problems += [Problem(predicate, relative, text) for text in schemas.needs_errors(name, document)]
     return problems
 
 
-def load_inputs(root: Path, lock: dict[str, Any]) -> Tree:
-    """The queue, the capture specifications, the routes, the table map and the frozen records: what readiness is computed from. The authored files stay empty
-    until :func:`load_authored`. A file that cannot be read raises RegistryFileError naming it."""
+def load_queue(root: Path) -> Tree:
+    """The queue, the capture specifications, the routes and the table map: what the queued outputs and their tables come from. Everything else stays empty.
+    A file that cannot be read raises RegistryFileError naming it."""
     queue, specs = read_json(root, QUEUE), read_json(root, SPECS)
     layout = read_json(root, LAYOUT)
     routes = {source: f"{group['publisher']}/{group['collection']}" for group in layout["groups"] for source in group["source_ids"]}
@@ -293,10 +346,18 @@ def load_inputs(root: Path, lock: dict[str, Any]) -> Tree:
         golden={},
         manual={},
         contracts={},
-        lock=lock,
-        source_registry=read_json(root, SOURCE_REGISTRY),
-        leaving=frozenset(row["collection"] for row in read_json(root, LEAVING_RECORD)["tables"]),
+        lock={},
+        source_registry={},
     )
+
+
+def load_inputs(root: Path, lock: dict[str, Any]) -> Tree:
+    """The queue's tree with the lock and the frozen records. The authored files stay empty until :func:`load_authored`."""
+    tree = load_queue(root)
+    tree.lock = lock
+    tree.source_registry = read_json(root, SOURCE_REGISTRY)
+    tree.leaving = frozenset(row["collection"] for row in read_json(root, LEAVING_RECORD)["tables"])
+    return tree
 
 
 def load_authored(tree: Tree) -> Tree:
@@ -430,26 +491,31 @@ def computed_gaps(tree: Tree, scope_tables: Mapping[str, str], picked: Sequence[
 
 
 def gap_problems(tree: Tree, gaps: list[dict[str, str]]) -> list[Problem]:
-    """I7: the computed gap set equals the gap set pinned for this map digest, and I8: each migration label is a step of the design."""
+    """I7: the computed gap set equals the gap set pinned for this map digest, with one pin for a table, and I8: the migration label of every pin and of every
+    unpinned gap is a step of the design. Each pin row is read, so a second row of a table hides neither."""
     pins = tree.lock["pins"]
-    problems: list[Problem] = []
+    rows = pins["gaps"]
+    tables = [row["table"] for row in rows]
+    computed = {gap["table"]: gap for gap in gaps}
+    unpinned = [gap for gap in gaps if gap["table"] not in tables]
+    labels = [
+        Problem("I8", row["table"], f"has migration label {row['step']!r}, which is not a step of design v4 section 8")
+        for row in sorted([*rows, *unpinned], key=lambda row: row["table"])
+        if not STEP_LIST.fullmatch(row["step"])
+    ]
+    problems = [Problem("I7", table, "is pinned more than once: keep one pin for a table") for table in sorted(set(tables)) if tables.count(table) > 1]
     if pins["map_sha256"] != tree.lock["map_sha256"]:
         problems.append(
             Problem("I7", "pins", f"are for map {pins['map_sha256'][:12]}, not the map of this lock ({tree.lock['map_sha256'][:12]}): regenerate them")
         )
-        return problems
-    computed, pinned = {gap["table"]: gap for gap in gaps}, {gap["table"]: gap for gap in pins["gaps"]}
-    for table in sorted(set(computed) - set(pinned)):
-        problems.append(Problem("I7", table, "is a gap (no queued output selects it) that is not pinned"))
-    for table in sorted(set(pinned) - set(computed)):
+        return problems + labels
+    problems += [Problem("I7", gap["table"], "is a gap (no queued output selects it) that is not pinned") for gap in unpinned]
+    for table in sorted(set(tables) - set(computed)):
         problems.append(Problem("I7", table, "is pinned as a gap but a queued output selects it: change the pin in a reviewed commit"))
-    for table in sorted(set(computed) & set(pinned)):
-        if computed[table] != pinned[table]:
-            problems.append(Problem("I7", table, f"differs from its pin: computed {computed[table]}, pinned {pinned[table]}"))
-    for table, gap in sorted({**computed, **pinned}.items()):
-        if not STEP_LIST.fullmatch(gap["step"]):
-            problems.append(Problem("I8", table, f"has migration label {gap['step']!r}, which is not a step of design v4 section 8"))
-    return problems
+    for row in sorted(rows, key=lambda row: row["table"]):
+        if row["table"] in computed and computed[row["table"]] != row:
+            problems.append(Problem("I7", row["table"], f"differs from its pin: computed {computed[row['table']]}, pinned {row}"))
+    return list(dict.fromkeys(problems + labels))
 
 
 def marked_outputs(tree: Tree, outputs: Sequence[Output]) -> dict[str, int]:
@@ -566,7 +632,8 @@ def closure_problems(root: Path) -> list[Problem]:
 
 
 def validate_documents(tree: Tree, schemas: records.Schemas) -> list[Problem]:
-    """I2: the authored files validate against their schemas. The layout contracts are the I12 row, so their schema failures carry that name.
+    """I2: the authored files validate against their schemas and hold what their readers need. The layout contracts are the I12 row, so their failures carry
+    that name.
 
     The evidence file is not read here. It closes no readiness item: the lock binds its bytes and the readiness report judges its shape."""
     documents = {
@@ -578,7 +645,7 @@ def validate_documents(tree: Tree, schemas: records.Schemas) -> list[Problem]:
     return [
         Problem("I12" if name == "layout_contracts" else "I2", AUTHORED[name], text)
         for name, document in documents.items()
-        for text in schema_errors(schemas, name, document)
+        for text in schema_errors(schemas, name, document) or schemas.needs_errors(name, document)
     ]
 
 
@@ -722,50 +789,91 @@ def contract_problems(tree: Tree) -> list[Problem]:
 def integrity(
     root: Path, report: Mapping[str, Any], schemas: records.Schemas, seats: Mapping[str, Iterable[str]] | None = None, skip: frozenset[str] = frozenset()
 ) -> Result:
-    """Every integrity predicate over a tree whose lock is bound. ``skip`` names predicates a test leaves out; the command never skips.
-
-    The readiness obligations are computed first, from the queue, the table map and the scope, so no authored file that fails a predicate removes one. The
-    shape lines about the authored and supplied files are made once the authored files pass their schemas."""
+    """Every integrity predicate over a tree whose lock and scope are bound. ``skip`` names predicates a test leaves out; the command never skips. A value no
+    predicate can read is a named problem, and the problems found before it stay."""
     result = Result()
+    try:
+        run_predicates(result, root, default_scope(report), schemas, seat_membership() if seats is None else seats, skip)
+    except INPUT_ERRORS as error:
+        result.problems.append(Problem("I2", "inputs", f"cannot be read: {type(error).__name__}: {error}"))
+    return result
+
+
+def run_predicates(
+    result: Result, root: Path, scope_tables: Mapping[str, str], schemas: records.Schemas, seats: Mapping[str, Iterable[str]], skip: frozenset[str]
+) -> None:
+    """Add what the predicates find to ``result``. The shape lines about the authored and supplied files are made once the authored files pass I2."""
     lock, problems = load_lock(root, schemas)
     if lock is None:
-        result.problems = problems
-        return result
-    scope_tables = default_scope(report)
-    try:
-        tree = load_inputs(root, lock)
-        outputs = unit_outputs(tree)
-        picked = selections(tree, outputs)
-        assessment = registry_readiness.obligations(tree.units, tree.tables, scope_tables, unselected(scope_tables, picked), marked_outputs(tree, outputs))
-    except INPUT_ERRORS as error:
-        result.problems = [Problem("I2", "inputs", f"cannot be read: {type(error).__name__}: {error}")]
-        return result
-    result.readiness, result.release_problems = assessment.items, assessment.problems
-    result.problems += [Problem("I2", f"{SCHEMAS}/{name}.schema.json", reason) for name, reason in sorted(schemas.unusable.items())]
-    try:
-        load_authored(tree)
-    except RegistryFileError as error:
-        result.problems.append(Problem("I2", "inputs", f"cannot be read: {error}"))
-        return result
+        result.problems += problems
+        return
+    tree = load_inputs(root, lock)
+    outputs = unit_outputs(tree)
+    picked = selections(tree, outputs)
+    result.problems += [Problem("I2", schema_path(name), reason) for name, reason in sorted(schemas.unusable.items())]
+    load_authored(tree)
     invalid = validate_documents(tree, schemas)
     result.problems += invalid
     if invalid:
-        return result
+        return
     result.notes = registry_readiness.observations(tree, scope_tables, schemas)
     result.problems += authored_problems(tree) + contract_problems(tree)
     if result.problems:
-        return result
+        return
     result.problems += unit_problems(tree) + source_problems(tree)
     result.gaps = computed_gaps(tree, scope_tables, picked)
     result.problems += gap_problems(tree, result.gaps)
     routing, routing_facts = route_problems(tree, outputs, picked, {gap["table"] for gap in tree.lock["pins"]["gaps"]})
     result.problems += routing
-    result.seat_gaps = computed_seat_gaps(tree, seat_membership() if seats is None else seats)
+    result.seat_gaps = computed_seat_gaps(tree, seats)
     result.problems += seat_problems(tree, result.seat_gaps)
     if "I6" not in skip:
         result.problems += closure_problems(root)
     result.facts = {"outputs": len(outputs), "units": len(tree.units), **routing_facts}
-    return result
+
+
+def as_locked(root: Path, lock: Mapping[str, Any], name: str) -> bool:
+    """Whether the lock lists a file and every row for it holds the file's digest now. The rows are read one by one, so a lock that is wrong elsewhere still
+    binds the file."""
+    rows = lock.get("files")
+    digests = [row.get("sha256") for row in rows if isinstance(row, Mapping) and row.get("path") == name] if isinstance(rows, list) else []
+    try:
+        actual = sha256_bytes((root / name).read_bytes())
+    except OSError:
+        return False
+    return bool(digests) and all(digest == actual for digest in digests)
+
+
+def scope_problems(report: Mapping[str, Any], lock: Mapping[str, Any]) -> list[Problem]:
+    """I1: the derived scope and the table map it was derived from are the ones the lock records."""
+    if sha256_bytes(scope.report_bytes(report)) != lock.get("scope_report_sha256"):
+        return [Problem("I1", "scope report", "differs from the lock: the default scope changed, regenerate the lock and review it")]
+    if report["inputs"]["table_map_sha256"] != lock.get("map_sha256"):
+        return [Problem("I1", "scope report", "was derived from another table map than the lock binds")]
+    return []
+
+
+def readiness_of(root: Path, report: Mapping[str, Any], lock: Mapping[str, Any]) -> registry_readiness.Assessment | None:
+    """The readiness report of a tree whose queue, table map and derived scope are the locked ones, or None. No other file and no other failure removes it.
+
+    The capture specifications and the collection layout give only the gaps and the marked outputs. Where they are not the locked ones or cannot be read, the
+    report says that these are not computed and keeps every item."""
+    if scope_problems(report, lock) or not all(as_locked(root, lock, name) for name in (QUEUE, TABLE_MAP)):
+        return None
+    try:
+        units = read_json(root, QUEUE)["queue"]
+        tables = scope.load_map(root / TABLE_MAP)["tables"]
+        scope_tables = default_scope(report)
+        gaps: list[str] | None = None
+        marked: dict[str, int] | None = None
+        if all(as_locked(root, lock, name) for name in (SPECS, LAYOUT)):
+            with contextlib.suppress(*INPUT_ERRORS):
+                tree = load_queue(root)
+                outputs = unit_outputs(tree)
+                gaps, marked = unselected(scope_tables, selections(tree, outputs)), marked_outputs(tree, outputs)
+        return registry_readiness.obligations(units, tables, scope_tables, gaps, marked)
+    except INPUT_ERRORS:
+        return None
 
 
 def check(
@@ -776,23 +884,28 @@ def check(
     seats: Mapping[str, Iterable[str]] | None = None,
     skip: frozenset[str] = frozenset(),
 ) -> Result:
-    """Run the integrity predicates (and, with ``release``, the readiness predicates) over a tree. Reads files only."""
-    result = Result()
+    """Run the integrity predicates (and, with ``release``, the readiness predicates) over a tree. Reads files only. The predicates run over a tree the lock
+    binds; the readiness report needs only what :func:`readiness_of` reads."""
     schemas = records.Schemas(root)
-    result.problems = lock_problems(root, schemas)
-    if result.problems:
-        return result
-    report = derived_scope(root)
-    refused = supplied_scope_problems(report, scope_report)
-    lock = read_json(root, LOCK)
-    if sha256_bytes(scope.report_bytes(report)) != lock["scope_report_sha256"]:
-        result.problems = [*refused, Problem("I1", "scope report", "differs from the lock: the default scope changed, regenerate the lock and review it")]
-        return result
-    if report["inputs"]["table_map_sha256"] != lock["map_sha256"]:
-        result.problems = [*refused, Problem("I1", "scope report", "was derived from another table map than the lock binds")]
-        return result
-    result = integrity(root, report, schemas, seats, skip)
-    result.problems = refused + result.problems
+    unbound = lock_problems(root, schemas)
+    try:
+        report = derived_scope(root)
+    except CANNOT_RUN:
+        if not unbound:
+            raise
+        return Result(problems=unbound)
+    try:
+        lock = read_json(root, LOCK)
+    except RegistryFileError:
+        lock = None
+    if not isinstance(lock, Mapping):
+        lock = {}
+    assessment = readiness_of(root, report, lock)
+    mismatch = scope_problems(report, lock) if "scope_report_sha256" in lock else []
+    result = Result(problems=unbound + mismatch) if unbound or mismatch else integrity(root, report, schemas, seats, skip)
+    if assessment:
+        result.readiness, result.release_problems = assessment.items, assessment.problems
+    result.problems = supplied_scope_problems(report, scope_report) + result.problems
     if release:
         result.problems += result.release_problems
     return result
@@ -801,13 +914,17 @@ def check(
 def build_lock(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
     """The lock of the tree as it is now: file digests, the scope report digest, the recorded decisions and the pinned gap and seat sets."""
     collections = read_json(root, AUTHORED["collections"])
+    unreadable = records.Schemas(root).needs_errors("collections", collections)
+    if unreadable:
+        raise RegistryFileError(f"{AUTHORED['collections']} {unreadable[0]}")
     digest = map_digest(root)
     files: dict[str, str] = {}
     for name in bound_paths(root):
         try:
             files[name] = sha256_bytes((root / name).read_bytes())
-        except OSError as error:
-            raise RegistryFileError(f"{name} is a bound file and cannot be read: {error.strerror or type(error).__name__}") from error
+        except (OSError, ValueError) as error:
+            reason = getattr(error, "strerror", None) or type(error).__name__
+            raise RegistryFileError(f"{name} is a bound file and cannot be read: {reason}") from error
     draft = {"map_sha256": digest, "pins": {"map_sha256": digest, "gaps": [], "seat_gaps": {}}}
     tree = load_authored(load_inputs(root, draft))
     gaps = computed_gaps(tree, default_scope(report), selections(tree, unit_outputs(tree)))
@@ -847,7 +964,8 @@ def render(result: Result, release: bool) -> str:
     lines += [f"  open: {item}" for item in result.readiness] or ["  (not computed)"]
     lines += [f"  {note}" for note in result.notes]
     lines.append(f"{'check --release' if release else 'check'}: {'pass' if result.ok else 'fail'} ({len(result.problems)} problems)")
-    return "\n".join(lines) + "\n"
+    # A JSON string may hold a lone surrogate, which no output encoding takes: it prints as its escape.
+    return ("\n".join(lines) + "\n").encode("utf-8", "backslashreplace").decode()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -874,7 +992,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stdout.write(f"lock written: {len(lock['files'])} files, {len(lock['pins']['gaps'])} pinned gaps\n")
             return 0
         result = check(arguments.root, release=arguments.release, scope_report=supplied)
-    except (RegistryFileError, scope.ScopeError, dbt_manifest_labels.ManifestError, dbt_package_archive.ArchiveError, OSError, ValueError) as error:
+    except CANNOT_RUN as error:
         sys.stderr.write(f"registry: cannot run: {error}\n")
         return 2
     sys.stdout.write(render(result, arguments.release))

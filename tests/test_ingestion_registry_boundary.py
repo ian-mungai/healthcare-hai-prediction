@@ -10,6 +10,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
+import socket
+import urllib.request
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -18,6 +21,7 @@ from typing import Any
 import pytest
 
 from scripts.ingestion import registry
+from scripts.ingestion import registry_records as records
 from tests.registry_perfect_support import EVIDENCE, FILES, IAM, MANUAL, RETENTION, add_evidence, add_manual, add_r4, bind, digest
 from tests.registry_support import edit_json, fresh_copy, replace, scope_report
 from tests.support import check
@@ -303,7 +307,9 @@ def test_the_shape_checks_use_the_schemas_bound_under_the_root(tmp_path: Path) -
 
 
 UNUSABLE_SCHEMAS = {
+    "a pattern that overflows the regex compiler": b'{"pattern": "x{99999999999}"}\n',
     "not a schema": b'{"type": 5}\n',
+    "an address that is no address": b'{"$ref": "http://["}\n',
     "not JSON": b"{\n",
     "a reference to nothing": b'{"$ref": "#/$defs/absent"}\n',
     "a reference to itself": b'{"$ref": "#"}\n',
@@ -368,3 +374,315 @@ def test_a_supplied_scope_report_that_is_no_json_object_is_a_named_i2_refusal(tm
     text = output.getvalue()
     check(code == 1 and "I2 scope report: is not a JSON object" in text, f"{command} with {name}: {code} {text[:400]}")
     check(SENTINEL not in text and (root / LOCK).read_bytes() == before, f"{command} printed the input or wrote the lock")
+
+
+def run_kept(root: Path, folder: Path, committed: tuple[int, str]) -> str:
+    """The release output of a broken tree, after checking that it holds every open item and readiness problem of the committed output and no traceback."""
+    _, text, _ = run_release(root, folder)
+    lines = set(text.splitlines())
+    lost = [line for line in committed[1].splitlines()[:-1] if line not in lines]
+    check(not lost, f"The readiness report lost lines: {lost[:3]}\n{text[:800]}")
+    check("Traceback" not in text, f"A traceback was printed: {text[-600:]}")
+    return text
+
+
+def drop_outcome(root: Path) -> None:
+    edit_json(root, MANUAL, lambda d: d["outcomes"].pop(0))
+
+
+def edit_unbound(relative: str) -> Callable[[Path], None]:
+    """Change a bound file's bytes and leave the lock as it is."""
+    return lambda root: replace(root, relative, (root / relative).read_bytes() + b" \n")
+
+
+def nul_plan_path(root: Path) -> None:
+    """A classified plan whose path no file system call accepts, listed by the lock."""
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].append({"path": "config/\u0000.json", "lifecycle": "retired"}))
+    rows = [{"path": name, "sha256": "0" * 64} for name in ("config/\u0000.json", "config/\u0000.lock.json")]
+    edit_json(root, LOCK, lambda lock: lock["files"].extend(rows))
+    rebind(root, COLLECTIONS)
+
+
+def unencodable_decision(root: Path) -> None:
+    """A decision record the canonical form refuses, under a schema that lets it through."""
+    replace(root, COLLECTIONS_SCHEMA, b"true\n")
+    edit_json(root, COLLECTIONS, lambda d: d["decisions"]["D1"].update(meaning=float("nan")))
+    rebind(root, COLLECTIONS_SCHEMA)
+    rebind(root, COLLECTIONS)
+
+
+COLLECTIONS_SCHEMA = "config/ingestion/schemas/collections.schema.json"
+LOCK_SCHEMA = "config/ingestion/schemas/registry_lock.schema.json"
+LEAVING = "config/lakehouse/bronze_leaving_scope.json"
+SOURCES = "config/acquisition/source_registry.json"
+BESIDE_READINESS: dict[str, tuple[Callable[[Path], None], str]] = {
+    "an outcome removed without relocking": (drop_outcome, f"I1 {MANUAL}: differs from the lock"),
+    "collections changed without relocking": (edit_unbound(COLLECTIONS), f"I1 {COLLECTIONS}: differs from the lock"),
+    "the leaving record unreadable": (lambda root: replace(root, LEAVING, b"{"), f"I1 {LEAVING}: differs from the lock"),
+    "the source registry changed": (edit_unbound(SOURCES), f"I1 {SOURCES}: differs from the lock"),
+    "an authored file deleted": (lambda root: (root / CONTRACTS).unlink(), f"I1 {CONTRACTS}: is bound by the lock but cannot be read"),
+    "a lock with an unknown property": (lambda root: edit_json(root, LOCK, lambda d: d.update(surprise=1)), f"I2 {LOCK}:"),
+    "a lock with unusable pins": (lambda root: edit_json(root, LOCK, lambda d: d.update(pins=None)), f"I2 {LOCK}:"),
+    "the lock schema deleted": (lambda root: (root / LOCK_SCHEMA).unlink(), f"I1 {LOCK_SCHEMA}:"),
+    "a plan path no file call accepts": (nul_plan_path, "is bound by the lock but cannot be read"),
+    "a record no canonical form accepts": (unencodable_decision, "I2 inputs:"),
+}
+
+
+@pytest.mark.parametrize("name", list(BESIDE_READINESS))
+def test_a_failure_beside_the_queue_the_map_and_the_scope_removes_no_readiness(tmp_path: Path, committed: tuple[int, str], name: str) -> None:
+    """The integrity problem is named AND every open item and readiness problem is still printed."""
+    change, named = BESIDE_READINESS[name]
+    root = fresh_copy(tmp_path / "tree")
+    change(root)
+    text = run_kept(root, tmp_path, committed)
+    check(named in text, f"{name} was not named ({named}): {text[:800]}")
+
+
+@pytest.mark.parametrize("report", ["no_such_file.json", "."])
+def test_a_supplied_scope_report_that_cannot_be_read_is_named_in_a_whole_report(tmp_path: Path, committed: tuple[int, str], report: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(["check", "--release", "--root", str(root), "--scope-report", str(tmp_path / report)])
+    text = output.getvalue()
+    check(code == 1 and "I2 scope report: cannot be read" in text and "fail (102 problems)" in text, f"No whole report: {code} {text[-600:]}")
+    check(all(line in text.splitlines() for line in committed[1].splitlines()[:-1] if not line.startswith("shape:")), "The report lost readiness lines")
+    before = (root / LOCK).read_bytes()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(["lock", "--root", str(root), "--scope-report", str(tmp_path / report)])
+    check(code == 1 and (root / LOCK).read_bytes() == before, f"The lock command took an unreadable report: {code}")
+
+
+@pytest.mark.parametrize("relative", ["config/acquisition/baseline_run/capture_specs.json", "config/acquisition/collection_layout.json"])
+def test_unlocked_gap_inputs_leave_every_item_open_and_say_that_the_gaps_are_not_computed(tmp_path: Path, committed: tuple[int, str], relative: str) -> None:
+    """The capture specifications and the layout only feed the gap list and the marked outputs. Their failure removes no item and no readiness problem."""
+    root = fresh_copy(tmp_path / "tree")
+    replace(root, relative, b"{")
+    _, text, _ = run_release(root, tmp_path)
+    lines = text.splitlines()
+    wanted = [line for line in committed[1].splitlines()[:-1] if not line.startswith(("  open: R1 usable", "  open: I4"))]
+    check(not [line for line in wanted if line not in lines], f"The report lost lines: {text[:600]}")
+    check(sum(line.startswith("  open: ") for line in lines) == sum(line.startswith("  open: ") for line in wanted) + 2, f"An item was lost: {text}")
+    check("gaps not computed" in text and "I4 outputs the check cannot decide offline: not counted" in text, f"The unknown facts are not said: {text}")
+
+
+@pytest.mark.parametrize("relative", ["config/acquisition/baseline_run/queue.json", "config/lakehouse/bronze_tables.json"])
+def test_an_unlocked_queue_or_table_map_computes_no_readiness(tmp_path: Path, relative: str) -> None:
+    """Readiness is never computed from a queue or a map the lock does not bind: a shorter queue would print fewer open units."""
+    root = fresh_copy(tmp_path / "tree")
+    edit_unbound(relative)(root)
+    code, text, _ = run_release(root, tmp_path)
+    check(code == 1 and f"I1 {relative}: differs from the lock" in text and "(not computed)" in text, f"No named stop: {code} {text[:800]}")
+
+
+def test_a_tree_whose_scope_cannot_be_derived_still_names_its_lock_problems(tmp_path: Path) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    shutil.rmtree(root / "dbt")
+    drop_outcome(root)
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(["check", "--root", str(root)])
+    check(code == 1 and f"I1 {MANUAL}: differs from the lock" in output.getvalue(), f"The lock problem was lost: {code} {output.getvalue()[:600]}")
+
+
+SCHEMA_NAMES = sorted(path.name.removesuffix(".schema.json") for path in (registry.ROOT / "config/ingestion/schemas").glob("*.schema.json"))
+
+
+@pytest.mark.parametrize("name", SCHEMA_NAMES)
+def test_a_missing_required_schema_is_an_i1_problem_that_the_lock_command_refuses_to_bind(tmp_path: Path, committed: tuple[int, str], name: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    relative = f"config/ingestion/schemas/{name}.schema.json"
+    (root / relative).unlink()
+    before = (root / LOCK).read_bytes()
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(["lock", "--root", str(root)])
+    check(code == 2 and relative in output.getvalue() and (root / LOCK).read_bytes() == before, f"The lock command bound a tree without {name}: {code}")
+    edit_json(root, LOCK, lambda lock: lock.update(files=[row for row in lock["files"] if row["path"] != relative]))
+    text = run_kept(root, tmp_path, committed)
+    check(any(line.startswith(f"I1 {relative}:") for line in text.splitlines()), f"The missing {name} schema was not named by I1: {text[:800]}")
+
+
+def edited(change: Callable[[Any], object]) -> Callable[[Any], Any]:
+    """A draft changed in place."""
+
+    def apply(draft: Any) -> Any:
+        change(draft)
+        return draft
+
+    return apply
+
+
+def becomes(value: Any) -> Callable[[Any], Any]:
+    """A draft replaced whole."""
+    return lambda _: value
+
+
+def first_source(change: dict[str, Any]) -> Callable[[Any], Any]:
+    return edited(lambda d: d["collections"][0]["sources"][0].update(change))
+
+
+def contract(change: dict[str, Any]) -> Callable[[Any], Any]:
+    return edited(lambda d: d["tables"]["hcai_finance_csv"].update(change))
+
+
+UNREADABLE_DRAFTS: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    "collections is null": ("collections", becomes(None)),
+    "collections is an array": ("collections", becomes([SENTINEL])),
+    "collections is empty": ("collections", becomes({})),
+    "a decision is null": ("collections", edited(lambda d: d["decisions"].update(D1=None))),
+    "a decision is absent": ("collections", edited(lambda d: d["decisions"].pop("D2"))),
+    "the interim record is null": ("collections", edited(lambda d: d["decisions"]["Q4"].update(interim=None))),
+    "the feeds are an object": ("collections", edited(lambda d: d.update(feeds={}))),
+    "a feed pattern is a number": ("collections", edited(lambda d: d["feeds"][0].update(name_regex=5))),
+    "a gap step is a number": ("collections", edited(lambda d: next(iter(d["gaps"].values())).update(step=5))),
+    "a source match is null": ("collections", first_source({"match": None})),
+    "a source state is a list": ("collections", first_source({"acquisition": [SENTINEL]})),
+    "a plan path is a number": ("collections", edited(lambda d: d["plans"][0].update(path=5))),
+    "manual outcomes is null": ("manual_outcomes", becomes(None)),
+    "an outcome has no unit": ("manual_outcomes", edited(lambda d: d["outcomes"].append({}))),
+    "the outcomes are a string": ("manual_outcomes", becomes({"outcomes": ""})),
+    "layout contracts is null": ("layout_contracts", becomes(None)),
+    "contract tables is an array": ("layout_contracts", becomes({"tables": []})),
+    "contract columns are numbers": ("layout_contracts", contract({"accepted_layouts": [{"id": "a", "columns_sha256": "b", "columns": [1, "a"]}]})),
+    "consumer columns are objects": ("layout_contracts", contract({"consumer_columns": [{}]})),
+    "the golden list is null": ("unit_golden", becomes(None)),
+    "a golden row is empty": ("unit_golden", edited(lambda d: d["units"].append({}))),
+    "the golden counts are empty": ("unit_golden", edited(lambda d: d.update(counts={}))),
+}
+
+
+def break_draft(root: Path, name: str) -> str:
+    """Bind a schema that accepts anything and the changed draft, by their digests alone, and return the draft's path."""
+    kind, change = UNREADABLE_DRAFTS[name]
+    schema, draft = f"config/ingestion/schemas/{kind}.schema.json", f"config/ingestion/{kind}.json"
+    changed = change(json.loads((root / draft).read_bytes()))
+    replace(root, schema, b"true\n")
+    replace(root, draft, json.dumps(changed).encode())
+    rebind(root, schema)
+    rebind(root, draft)
+    return draft
+
+
+@pytest.mark.parametrize("name", list(UNREADABLE_DRAFTS))
+def test_a_draft_that_lacks_what_its_reader_needs_is_refused_by_name_whatever_its_schema_allows(tmp_path: Path, committed: tuple[int, str], name: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    draft = break_draft(root, name)
+    text = run_kept(root, tmp_path, committed)
+    check(f" {draft}: lacks the structure its reader needs" in text, f"{name} was not refused by name: {text[:900]}")
+    check(SENTINEL not in text, f"{name} printed an input value")
+
+
+@pytest.mark.parametrize("name", [name for name, (kind, _) in UNREADABLE_DRAFTS.items() if kind == "collections"])
+def test_the_lock_command_refuses_by_name_a_collections_draft_it_cannot_read(tmp_path: Path, name: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    draft = break_draft(root, name)
+    before = (root / LOCK).read_bytes()
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(["lock", "--root", str(root)])
+    text = output.getvalue()
+    check(code == 2 and f"{draft} lacks the structure its reader needs" in text, f"{name}: no named refusal: {code} {text[:600]}")
+    check((root / LOCK).read_bytes() == before and SENTINEL not in text, f"{name} wrote the lock or printed an input value")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["pins"]["gaps"][0].pop("table"),
+        lambda d: d["pins"].update(gaps=None),
+        lambda d: d.pop("parents"),
+        lambda d: d["files"].append({"sha256": "0" * 64}),
+    ],
+)
+def test_a_lock_that_lacks_what_its_reader_needs_is_refused_by_name_whatever_its_schema_allows(
+    tmp_path: Path, committed: tuple[int, str], change: Callable[[Any], object]
+) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    replace(root, LOCK_SCHEMA, b"true\n")
+    rebind(root, LOCK_SCHEMA)
+    edit_json(root, LOCK, change)
+    text = run_kept(root, tmp_path, committed)
+    check(f"I2 {LOCK}: lacks the structure its reader needs" in text, f"The lock was not refused by name: {text[:900]}")
+
+
+def test_the_report_prints_text_no_encoding_accepts_as_escapes() -> None:
+    result = registry.Result(problems=[registry.Problem("I3", "\ud800", "is a unit key")])
+    check("\\ud800" in registry.render(result, False).encode().decode(), "A lone surrogate stops the report")
+
+
+EXTERNAL_REFERENCES = {
+    "an external address": {"$ref": "https://registry.invalid/live.schema.json"},
+    "an external address nothing reaches": {"$defs": {"unused": {"$ref": "https://registry.invalid/live.schema.json"}}, "type": "object"},
+    "an external address inside a property": {"properties": {"absent": {"items": {"$ref": "https://registry.invalid/live.schema.json"}}}},
+    "an external dynamic reference": {"$dynamicRef": "https://registry.invalid/live.schema.json#node"},
+    "a file address": {"$ref": "file:///etc/hosts"},
+    "a schema the tree does not bind": {"$ref": "other.schema.json"},
+    "an absent local definition": {"$ref": "#/$defs/absent"},
+    "a relative address under an external identifier": {"$id": "https://registry.invalid/a.json", "$ref": "b.json"},
+    "the metaschema": {"$ref": "https://json-schema.org/draft/2020-12/schema"},
+}
+
+
+@pytest.fixture
+def retrievals(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every attempt to open an address or a connection, refused before any input or output."""
+    seen: list[str] = []
+
+    def refuse(target: Any, *_: Any, **__: Any) -> Any:
+        seen.append(str(getattr(target, "full_url", target)))
+        raise OSError("this test allows no network access")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    return seen
+
+
+@pytest.mark.parametrize("name", list(EXTERNAL_REFERENCES))
+def test_a_schema_reference_that_no_bound_schema_resolves_is_a_named_refusal_with_no_retrieval(tmp_path: Path, retrievals: list[str], name: str) -> None:
+    result = supplied_evidence(fresh_copy(tmp_path / "tree"), json.dumps(EXTERNAL_REFERENCES[name]).encode())
+    named = [str(problem) for problem in result.problems if problem.predicate == "I2" and problem.subject == LIVE_SCHEMA]
+    check(len(named) == 1 and "reference" in named[0], f"{name} was not named: {result.problems[:3]}")
+    check(not retrievals, f"{name} tried to retrieve: {retrievals}")
+    live = [note for note in result.notes if "cms_hai_hospital: live check" in note]
+    check(len(live) == 1 and "refused" in live[0], f"{name} was accepted: {result.notes}")
+    check(len(result.readiness) >= 9, f"{name} removed readiness items: {result.readiness}")
+
+
+def test_evaluating_an_unresolved_reference_retrieves_nothing(tmp_path: Path, retrievals: list[str]) -> None:
+    """The validator itself holds no retriever, so a reference the walk of a schema does not reach is a refusal too."""
+    schemas = records.Schemas(registry.ROOT)
+    found = schemas.errors_of({"$ref": "https://registry.invalid/live.schema.json"}, {})
+    check(found and "cannot be evaluated" in found[0] and not retrievals, f"The reference was retrieved or accepted: {found} {retrievals}")
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"$defs": {"record": {"type": "object"}}, "$ref": "#/$defs/record"},
+        {"$ref": "iam_plan_evidence.schema.json"},
+        {"$id": "https://registry.invalid/live.json", "$defs": {"record": {"$id": "record.json", "type": "object"}}, "$ref": "record.json"},
+    ],
+)
+def test_local_definitions_and_bound_schemas_still_resolve(tmp_path: Path, retrievals: list[str], schema: dict[str, Any]) -> None:
+    result = supplied_evidence(fresh_copy(tmp_path / "tree"), json.dumps(schema).encode())
+    check(not [problem for problem in result.problems if problem.subject == LIVE_SCHEMA], f"A resolvable reference was refused: {result.problems[:3]}")
+    live = [note for note in result.notes if "cms_hai_hospital: live check" in note]
+    check(len(live) == 1 and "cannot be evaluated" not in live[0] and not retrievals, f"The reference did not resolve: {live} {retrievals}")
+
+
+def test_a_local_definition_of_the_evidence_schema_resolves_for_one_entry(tmp_path: Path) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    relative = "config/ingestion/schemas/input_evidence.schema.json"
+
+    def change(schema: Any) -> None:
+        schema["$defs"] = {"entry": schema["properties"]["tables"]["items"]}
+        schema["properties"]["tables"]["items"] = {"$ref": "#/$defs/entry"}
+
+    edit_json(root, relative, change)
+    add_evidence(root, "cms_hai_hospital")
+    bind(root)
+    result = registry.check(root, release=True, scope_report=scope_report(), skip=frozenset({"I6"}))
+    live = [note for note in result.notes if "cms_hai_hospital: live check" in note]
+    check(len(live) == 1 and "shape accepted" in live[0], f"The local definition was not resolved: {result.notes}")

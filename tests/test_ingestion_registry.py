@@ -6,6 +6,7 @@ Each case edits a copy of the committed inputs and runs the real check on it. No
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import shutil
@@ -109,6 +110,56 @@ def test_a_pin_for_another_map_is_refused(tmp_path: Path) -> None:
     edit_json(root, LOCK, lambda lock: lock["pins"].update(map_sha256="0" * 64))
     result = registry.check(root, scope_report=scope_report(), skip=NO_CLOSURES)
     check(any(problem.predicate == "I7" and "map" in problem.message for problem in result.problems), f"A pin for another map passed: {result.problems}")
+
+
+def repeat_pin(position: int, **change: str) -> Callable[[Any], None]:
+    """A second pin of the first pinned table, in front of the real one or after every pin."""
+    return lambda lock: lock["pins"]["gaps"].insert(position, {**lock["pins"]["gaps"][0], **change})
+
+
+@pytest.mark.parametrize("position", [0, 99])
+@pytest.mark.parametrize("step", ["S99", None])
+def test_a_repeated_gap_pin_is_refused_and_the_step_of_every_pin_is_checked(tmp_path: Path, position: int, step: str | None) -> None:
+    """A repeated table hides no pin: I7 refuses the repeat wherever it stands and I8 reads the label of every pin."""
+    root = fresh_copy(tmp_path / "tree")
+    table = json.loads((root / LOCK).read_bytes())["pins"]["gaps"][0]["table"]
+    edit_json(root, LOCK, repeat_pin(position, **({"step": step} if step else {})))
+    result = registry.check(root, scope_report=scope_report(), skip=NO_CLOSURES)
+    repeats = [problem for problem in result.problems if problem.predicate == "I7" and "pinned more than once" in problem.message]
+    check([problem.subject for problem in repeats] == [table], f"The repeated pin was not refused: {result.problems}")
+    labels = [str(problem) for problem in result.problems if problem.predicate == "I8"]
+    check(bool(labels) == bool(step) and all("'S99'" in text for text in labels), f"The labels were not each checked: {result.problems}")
+
+
+def test_the_labels_of_pins_for_another_map_are_still_checked(tmp_path: Path) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    edit_json(root, LOCK, lambda lock: (lock["pins"].update(map_sha256="0" * 64), lock["pins"]["gaps"][0].update(step="S99")))
+    result = registry.check(root, scope_report=scope_report(), skip=NO_CLOSURES)
+    check(named(result.problems, "I8") == [json.loads((root / LOCK).read_bytes())["pins"]["gaps"][0]["table"]], f"The label was skipped: {result.problems}")
+
+
+@pytest.mark.parametrize(
+    ("relative", "first"),
+    [(LOCK, '"step": "S99", '), (COLLECTIONS, '"step": "S99", ')],
+)
+def test_a_json_object_that_repeats_a_key_is_refused_by_name(tmp_path: Path, relative: str, first: str) -> None:
+    """The parser keeps the last of two keys, so a repeated key would hide an invalid migration step."""
+    root = fresh_copy(tmp_path / "tree")
+    text = (root / relative).read_text()
+    replace(root, relative, text.replace('"step": ', first + '"step": ', 1).encode())
+    if relative != LOCK:
+        edit_json_digest(root, relative)
+    code, output = command(["check", "--root", str(root)])
+    check(code == 1 and relative in output and "repeats a key" in output, f"The repeated key was accepted: {code} {output[:600]}")
+    if relative != LOCK:
+        code, output = command(["lock", "--root", str(root)])
+        check(code == 2 and "repeats a key" in output, f"The lock command took a repeated key: {code} {output[:600]}")
+
+
+def edit_json_digest(root: Path, relative: str) -> None:
+    """Write the lock's digest of one bound file again."""
+    digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
+    edit_json(root, LOCK, lambda lock: next(row for row in lock["files"] if row["path"] == relative).update(sha256=digest))
 
 
 def test_the_pinned_census_seat_gap_is_needed_and_removing_it_names_the_mode(tmp_path: Path) -> None:

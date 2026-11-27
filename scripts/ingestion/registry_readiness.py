@@ -17,13 +17,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from scripts.ingestion import registry_records as records
-from scripts.ingestion.registry_model import MANUAL_ROUTE, Problem, Tree
+from scripts.ingestion.registry_model import DECISIONS, MANUAL_ROUTE, Problem, Tree
 
 RULE = (
     "Step S4 builds the integrity check and this report only. No file of any kind closes or reduces a readiness item: "
     "the checks that would let a supplied file close an item are built later, in the steps that produce real records."
 )
-DECISIONS = ("D1", "D2", "D3", "Q4")
 INTERIM_FIELDS = ("trigger", "follow_up", "accountable", "due")
 PENDING = "pending_owner"
 COLLECTIONS_FILE = "config/ingestion/collections.json"
@@ -42,11 +41,10 @@ WAIT_LAYOUT = "header facts (S9 inventory or L4)"
 
 @dataclass
 class Assessment:
-    """The open readiness items, as READINESS lines, the problems that make ``check --release`` fail and the shape notes about authored and supplied files."""
+    """The open readiness items, as READINESS lines, and the problems that make ``check --release`` fail."""
 
     items: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
 
     def open(self, item: str | None, *problems: Problem) -> None:
         """Add an open item and its problems. This is the only way an item enters the report, and there is no way to remove one."""
@@ -82,10 +80,12 @@ def obligations(
     units: Sequence[Mapping[str, Any]],
     tables: Sequence[Mapping[str, Any]],
     scope: Mapping[str, str],
-    gap_tables: Collection[str],
+    gap_tables: Collection[str] | None,
     marked: Mapping[str, int] | None,
 ) -> Assessment:
-    """Every open item and problem of a tree, from the queue, the table map, the default scope, the computed gaps and the marked outputs. No authored file."""
+    """Every open item and problem of a tree, from the queue, the table map, the default scope, the computed gaps and the marked outputs. No authored file.
+
+    The gaps and the marked outputs are None when they cannot be computed: their items stay and say so."""
     result = Assessment()
     mapped = {table["table"]: table for table in tables}
     open_tables = sorted(scope)
@@ -96,9 +96,11 @@ def obligations(
             for table in open_tables
         ),
     )
-    open_gaps = sorted(set(gap_tables) & set(open_tables))
+    open_gaps = sorted(set(gap_tables or ()) & set(open_tables))
     if len(open_tables) <= LIST_LIMIT:
         listing = names(open_tables)
+    elif gap_tables is None:
+        listing = f"{len(open_tables)} tables, gaps not computed"
     else:
         gap_list = f" ({names(open_gaps)})" if open_gaps else ""
         listing = f"{len(open_gaps)} gaps with no selected queued output{gap_list}; {len(open_tables) - len(open_gaps)} with a selected queued output"
@@ -136,9 +138,12 @@ def obligations(
         "I9 closed scopes: none is confirmed in this step (the check tests only the scopes a pattern can test); waiting for the lead's review",
         Problem("I9", "closed scopes", "are not confirmed in this step: waiting for the lead's review"),
     )
-    if marked:
+    waits = f"waiting for {WAIT_MANIFEST} and S9"
+    if marked is None:
+        result.open(f"I4 outputs the check cannot decide offline: not counted, because the outputs of the queue cannot be computed; {waits}")
+    elif marked:
         counts = f"{marked['archive_members']} archive members, {marked['dataset_id_collections']} in dataset-ID collections"
-        result.open(f"I4 outputs the check cannot decide offline (marked, never passed): {counts}; waiting for {WAIT_MANIFEST} and S9")
+        result.open(f"I4 outputs the check cannot decide offline (marked, never passed): {counts}; {waits}")
     return result
 
 

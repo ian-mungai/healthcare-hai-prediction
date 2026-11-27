@@ -17,13 +17,31 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.exceptions import ValidationError
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 from scripts.acquisition import completion_record
+from scripts.ingestion.registry_model import NEEDS
 
 SCHEMA_FOLDER = "config/ingestion/schemas"
 SCHEMA_SUFFIX = ".schema.json"
 ACCEPTED = "shape accepted, not usable in this step"
+# The schemas every tree must hold: the lock binds each whether or not the tree has it, so a missing one fails by name.
+REQUIRED_SCHEMAS = (
+    "collections",
+    "completion_record",
+    "iam_plan_evidence",
+    "input_evidence",
+    "inventory_record",
+    "layout_contracts",
+    "live_check",
+    "manual_outcomes",
+    "manual_record",
+    "registry_lock",
+    "retention_input",
+    "unit_golden",
+)
 
 
 class Refusal(ValueError):
@@ -65,23 +83,51 @@ def describe(error: ValidationError, names: Collection[str]) -> str:
     return f"{where}: {keyword}"
 
 
+def references_resolve(document: Any, registry: Registry[Any]) -> bool:
+    """Whether every reference of a schema and of its subschemas resolves in the registry, which holds the bound schemas and retrieves nothing."""
+    root = DRAFT202012.create_resource(document)
+    pending: list[tuple[Resource[Any], Any]] = [(root, registry.resolver_with_root(root))]
+    while pending:
+        resource, resolver = pending.pop()
+        try:
+            if isinstance(resource.contents, dict):
+                for keyword in ("$ref", "$dynamicRef"):
+                    if keyword in resource.contents:
+                        resolver.lookup(resource.contents[keyword])
+            pending.extend((child, resolver.in_subresource(child)) for child in resource.subresources())
+        except Exception:  # an unresolvable or malformed address raises library and standard errors of several types
+            return False
+    return True
+
+
 class Schemas:
-    """The registry schemas of one tree, read once. Integrity and the shape checks validate against these and no others."""
+    """The registry schemas of one tree, read once. Integrity and the shape checks validate against these and no others.
+
+    A reference resolves to a definition of its own schema or to another schema of the tree, by its file name or its ``$id``. The registry that holds them has
+    no retriever, so no validation opens an address or a file."""
 
     def __init__(self, root: Path) -> None:
         self.documents: dict[str, Any] = {}
-        # A file that is no JSON schema, by name, with why.
+        # A file that is no usable JSON schema, by name, with why.
         self.unusable: dict[str, str] = {}
         for path in sorted((root / SCHEMA_FOLDER).glob(f"*{SCHEMA_SUFFIX}")):
             name = path.name.removesuffix(SCHEMA_SUFFIX)
             try:
                 document = json.loads(path.read_bytes())
                 Draft202012Validator.check_schema(document)
-            except (OSError, ValueError, RecursionError, SchemaError) as error:
+            except Exception as error:  # a pattern the regex compiler cannot hold raises its own error, not a schema error
                 self.unusable[name] = f"is not a usable JSON schema ({type(error).__name__})"
                 continue
             self.documents[name] = document
-        self.names = property_names(self.documents.values())
+        resources = {name: DRAFT202012.create_resource(document) for name, document in self.documents.items()}
+        self.registry: Registry[Any] = Registry().with_resources(
+            (address, resource) for name, resource in resources.items() for address in (f"{name}{SCHEMA_SUFFIX}", resource.id()) if address
+        )
+        for name, document in list(self.documents.items()):
+            if not references_resolve(document, self.registry):
+                self.unusable[name] = "has a reference that resolves to no definition of its own and to no schema of the tree"
+                del self.documents[name]
+        self.names = property_names([*self.documents.values(), *NEEDS.values()])
 
     def document(self, name: str) -> Any:
         if name not in self.documents:
@@ -91,13 +137,18 @@ class Schemas:
     def errors_of(self, schema: Any, value: Any, limit: int = 3) -> list[str]:
         """The first failures of a value against a schema, each content-free, in a stable order."""
         try:
-            found = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda error: [str(step) for step in error.absolute_path])
+            validator = Draft202012Validator(schema, registry=self.registry)
+            found = sorted(validator.iter_errors(value), key=lambda error: [str(step) for step in error.absolute_path])
             return [describe(error, self.names) for error in found[:limit]]
         except Exception as error:  # a missing or endless reference of a bound schema shows only here, as library errors of many types
             return [f"(document): the schema cannot be evaluated ({type(error).__name__})"]
 
     def errors(self, name: str, value: Any, limit: int = 3) -> list[str]:
         return self.errors_of(self.document(name), value, limit)
+
+    def needs_errors(self, name: str, value: Any) -> list[str]:
+        """Where a document lacks what its readers need (``NEEDS``), whatever its bound schema allows."""
+        return [f"lacks the structure its reader needs: {text}" for text in self.errors_of(NEEDS[name], value)]
 
 
 def require(name: str, document: Any, what: str, schemas: Schemas) -> None:
@@ -179,7 +230,7 @@ def iam_shape(document: Any, schemas: Schemas) -> None:
 
 RECORD_SHAPES = {"unit_records": completion_shape, "inventory_record": inventory_shape, "manual_outcome": manual_shape}
 # What a check meets when a bound schema lets through a document it cannot read.
-UNREADABLE = (KeyError, TypeError, AttributeError, ValueError, RecursionError)
+UNREADABLE = (LookupError, TypeError, AttributeError, ValueError, ArithmeticError, RecursionError)
 
 
 def outcome(check: Any, document: Any, schemas: Schemas) -> str:
@@ -207,6 +258,9 @@ def evidence_envelope(document: Any, schemas: Schemas) -> tuple[list[Any], Any]:
     bound = schemas.document("input_evidence")
     try:
         entry = bound["properties"]["tables"]["items"]
+        # An entry is validated alone, so it takes the local definitions it may name with it.
+        if "$defs" in bound and isinstance(entry, dict):
+            entry = {"$defs": bound["$defs"], **entry}
         exact = {**bound, "properties": {**bound["properties"], "tables": {"type": "array"}}}
     except (KeyError, TypeError):
         raise Refusal("the tree's input_evidence schema describes no table entry") from None

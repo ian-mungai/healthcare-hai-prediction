@@ -128,6 +128,11 @@ def delete_and_unlist(name: str) -> Callable[[Path], None]:
     return change
 
 
+def unreadable_outcomes(root: Path) -> None:
+    replace(root, f"{registry.SCHEMAS}/manual_outcomes.schema.json", b"true\n")
+    replace(root, OUTCOMES, b"null\n")
+
+
 def binding_mutations() -> list[Mutation]:
     """The broken scope, lock bindings, schemas and inputs that must each fail by name."""
     plan = "config/acquisition/census_acs_tables_plan.json"
@@ -158,6 +163,36 @@ def binding_mutations() -> list[Mutation]:
             "is a manual unit with no outcome",
             relock=True,
             also="open: R1 manual outcomes",
+        ),
+        Mutation(
+            "I1",
+            "a manual outcome is removed without relocking",
+            lambda root: edit_json(root, OUTCOMES, lambda d: d["outcomes"].pop(0)),
+            f"{OUTCOMES}: differs from the lock",
+            also="open: R1 manual outcomes",
+        ),
+        Mutation("I1", "a required shape schema is deleted and unlisted", delete_and_unlist(live_schema), live_schema, also="open: R1 usable-input"),
+        Mutation(
+            "I2",
+            "a draft is unreadable under a schema that accepts anything",
+            unreadable_outcomes,
+            f"{OUTCOMES}: lacks the structure its reader needs",
+            relock=True,
+            also="open: R1 manual outcomes",
+        ),
+        Mutation(
+            "I2",
+            "a bound schema refers to an external address",
+            lambda root: replace(root, live_schema, b'{"$ref": "https://registry.invalid/live.schema.json"}\n'),
+            f"{live_schema}: has a reference that resolves",
+            relock=True,
+        ),
+        Mutation(
+            "I7",
+            "a gap pin is repeated in front with an unknown migration label",
+            lambda root: edit_json(root, LOCK, lambda d: d["pins"]["gaps"].insert(0, {**d["pins"]["gaps"][0], "step": "S99"})),
+            "cms_hospital_cost_reports_dictionaries: is pinned more than once",
+            also="cms_hospital_cost_reports_dictionaries: has migration label 'S99'",
         ),
         Mutation("I2", "a bound shape schema is no schema", lambda root: replace(root, live_schema, b'{"type": 5}\n'), live_schema, relock=True),
         Mutation(
