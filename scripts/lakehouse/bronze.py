@@ -195,9 +195,12 @@ class Storage(Protocol):
 def load_table_map(path: Path = TABLE_MAP) -> dict[str, Any]:
     """Read and validate the table map: each key once in an object, unique names, one selector per table and a supported format."""
     # Decoded to text, as the silver pin reader and the AWS bronze wrapper do: json.loads strips a byte-order mark from bytes and refuses it in text.
-    config = json.loads(path.read_text(), object_pairs_hook=unique_object, parse_constant=reject_constant)
+    try:
+        config = json.loads(path.read_text(), object_pairs_hook=unique_object, parse_constant=reject_constant)
+    except ValueError as error:
+        raise BronzeError(f"Cannot read {path.name}: {error}") from error
     if not isinstance(config, dict):
-        raise BronzeError("the table map must contain a JSON object")
+        raise BronzeError(f"{path.name} must contain a JSON object")
     names = [table["table"] for table in config["tables"]]
     if len(set(names)) != len(names):
         raise BronzeError("the table map repeats a table name")

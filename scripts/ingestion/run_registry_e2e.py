@@ -312,7 +312,7 @@ def run_command(arguments: Sequence[str]) -> tuple[int, str]:
 
 
 def file_digests(root: Path) -> dict[str, str]:
-    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in registry.bound_paths(root)}
+    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in registry.bound_paths(root, registry.classified_plans(root).names)}
 
 
 def run_mutation(mutation: Mutation, report: dict[str, Any], scratch: Path) -> dict[str, Any]:

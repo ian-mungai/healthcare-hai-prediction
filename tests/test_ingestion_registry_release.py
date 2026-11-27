@@ -44,13 +44,13 @@ def test_release_on_the_committed_files_exits_1_and_lists_the_open_items(tmp_pat
     """Case 10: check passes on the committed files with no byte changed; check --release exits 1 and lists the open items by name."""
     report_file = tmp_path / "scope_report.json"
     report_file.write_bytes(registry.scope.report_bytes(scope_report()))
-    before = {name: digest((registry.ROOT / name).read_bytes()) for name in registry.bound_paths(registry.ROOT)}
+    before = {name: digest((registry.ROOT / name).read_bytes()) for name in registry.bound_paths(registry.ROOT, registry.classified_plans(registry.ROOT).names)}
     plain, release = io.StringIO(), io.StringIO()
     with redirect_stdout(plain):
         plain_code = registry.main(["check", "--scope-report", str(report_file)])
     with redirect_stdout(release):
         release_code = registry.main(["check", "--release", "--scope-report", str(report_file)])
-    after = {name: digest((registry.ROOT / name).read_bytes()) for name in registry.bound_paths(registry.ROOT)}
+    after = {name: digest((registry.ROOT / name).read_bytes()) for name in registry.bound_paths(registry.ROOT, registry.classified_plans(registry.ROOT).names)}
     check(before == after, "The check changed a bound file")
     check(
         plain_code == 0 and "READINESS" in plain.getvalue() and "pass" in plain.getvalue(),

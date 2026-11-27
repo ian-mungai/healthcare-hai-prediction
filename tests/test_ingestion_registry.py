@@ -508,6 +508,9 @@ def test_the_table_map_loader_and_the_pin_reader_both_refuse_a_byte_order_mark(t
         (b'{"tables": [], "tables": []}', "Duplicate JSON key: tables"),
         (b'{"tables": [], "unused": NaN}', "Invalid JSON number: NaN"),
         (b"[]", "must contain a JSON object"),
+        (b"{", "Expecting property name"),
+        (codecs.BOM_UTF8 + b'{"tables": []}', "Unexpected UTF-8 BOM"),
+        (b"\xff", "codec can't decode"),
     ],
 )
 def test_the_table_map_loader_stays_strict(tmp_path: Path, body: bytes, reason: str) -> None:
@@ -515,7 +518,7 @@ def test_the_table_map_loader_stays_strict(tmp_path: Path, body: bytes, reason: 
     try:
         bronze.load_table_map(tmp_path / "bronze_tables.json")
     except ValueError as error:
-        check(reason in str(error), f"Another refusal: {error}")
+        check(reason in str(error) and "bronze_tables.json" in str(error), f"Another refusal or no file name: {error}")
     else:
         check(False, f"The table map was read: {body!r}")
 
@@ -560,3 +563,63 @@ def test_a_classified_plan_outside_the_tree_is_refused_by_both_commands(tmp_path
     for name in ("lock", "check"):
         command([name, "--root", str(root)])
         check(not opened, f"The {name} command read a file outside the tree before it refused it: {opened}")
+
+
+# Plan rows no plan file name forms. Each goes before the committed rows, so a row that stops the reading would drop every one of them.
+UNNAMEABLE_PLANS: dict[str, Any] = {
+    "the root of the tree": ".",
+    "an empty path": "",
+    "the parent folder": "..",
+    "a folder": "config/acquisition",
+    "a name with no suffix": "config/acquisition/census_acs_api_plan",
+    "the name of a plan lock": "config/acquisition/census_acs_api_plan.lock.json",
+    "a suffix with no name": "config/acquisition/.json",
+    "a path that is not written plainly": "config/acquisition/./census_acs_api_plan.json",
+    "a number": 5,
+    "null": None,
+}
+
+
+@pytest.mark.parametrize("name", list(UNNAMEABLE_PLANS))
+def test_a_plan_row_that_names_no_plan_file_is_refused_and_drops_no_other_row(tmp_path: Path, name: str) -> None:
+    """One bad row is a named I1 failure. The rows after it stay bound, and the lock command writes nothing."""
+    root = fresh_copy(tmp_path / "tree")
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].insert(0, {"path": UNNAMEABLE_PLANS[name], "lifecycle": "retired"}))
+    before = (root / registry.LOCK).read_bytes()
+    code, output = command(["lock", "--root", str(root)])
+    refusal = f"{COLLECTIONS} plans/0" if isinstance(UNNAMEABLE_PLANS[name], str) else f"{COLLECTIONS} lacks the structure its reader needs"
+    check(code == 2 and refusal in output and (root / registry.LOCK).read_bytes() == before, f"The lock command took {name}: {code} {output[:600]}")
+    rebind_by_hand(root, [COLLECTIONS])
+    code, output = command(["check", "--root", str(root)])
+    check(code == 1 and f"I1 {COLLECTIONS} plans/0: " in output, f"The check did not refuse {name}: {code} {output[:900]}")
+    check("is listed by the lock but is not a bound file" not in output, f"A later plan row was dropped after {name}: {output[:900]}")
+
+
+@pytest.mark.parametrize("row", [{"lifecycle": "retired"}, "config/acquisition/census_acs_api_plan.json", None])
+def test_a_plan_row_that_holds_no_path_is_an_i1_failure(tmp_path: Path, row: object) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].insert(0, row))
+    rebind_by_hand(root, [COLLECTIONS])
+    code, output = command(["check", "--root", str(root)])
+    check(code == 1 and f"I1 {COLLECTIONS} plans/0: " in output, f"The check did not refuse the row: {code} {output[:900]}")
+    check("is listed by the lock but is not a bound file" not in output, f"A later plan row was dropped: {output[:900]}")
+
+
+def test_a_repeated_plan_path_is_refused_by_both_commands(tmp_path: Path) -> None:
+    """Two rows of one plan may hold two lifecycles, so neither is taken."""
+    root = fresh_copy(tmp_path / "tree")
+    position = len(json.loads((root / COLLECTIONS).read_bytes())["plans"])
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].append({**d["plans"][0], "lifecycle": "deferred"}))
+    refused_by_both_commands(root, [COLLECTIONS], f"{COLLECTIONS} plans/{position}: repeats the plan path of an earlier row")
+
+
+def test_a_folder_with_a_plan_name_is_refused_and_a_later_missing_plan_is_still_named(tmp_path: Path) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    folder = "config/acquisition/folder_plan.json"
+    (root / folder).mkdir()
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].insert(0, {"path": folder, "lifecycle": "retired"}))
+    classify_a_missing_plan(root)
+    output = refused_by_both_commands(root, [COLLECTIONS], f"{folder}")
+    rebind_by_hand(root, [COLLECTIONS])
+    code, output = command(["check", "--root", str(root)])
+    check("config/acquisition/none.json: is a bound file the lock does not list" in output, f"The later row was dropped: {code} {output[:900]}")

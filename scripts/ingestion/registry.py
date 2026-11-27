@@ -90,6 +90,10 @@ NOT_SUPPLIED: Any = object()
 UNREADABLE_REPORT: Any = object()
 # Why a classified plan or its lock is not read.
 NO_PLAN_FILE = "is a classified plan or its lock and is no readable file inside the tree"
+# Why a row of the classified plans is refused.
+NO_PLAN_NAME = (
+    "has a path that is no readable file inside the tree by a plan file name (a plain relative path that ends in .json and does not end in .lock.json)"
+)
 # What reading inputs of a wrong shape raises.
 INPUT_ERRORS = (
     RegistryFileError,
@@ -240,15 +244,40 @@ def schema_path(name: str) -> str:
     return f"{SCHEMAS}/{name}.schema.json"
 
 
-def classified_plans(root: Path) -> set[str]:
-    """Each classified plan of the tree's collections file with its companion lock, as far as the file can be read."""
-    found: set[str] = set()
+def is_plan_name(path: Any) -> bool:
+    """Whether a plan's companion lock can be named from the path: a plain relative path to a .json file that is not itself a lock."""
+    if not isinstance(path, str) or not path.endswith(".json") or path.endswith(".lock.json"):
+        return False
+    parts = path.split("/")
+    return parts[-1] != ".json" and not any(part in ("", ".", "..") for part in parts)
+
+
+class ClassifiedPlans(NamedTuple):
+    """The rows of a tree's classified plans: the plan and companion lock of each usable row, and an I1 problem for each other row."""
+
+    names: frozenset[str]
+    refused: list[Problem]
+
+
+def classified_plans(root: Path) -> ClassifiedPlans:
+    """Each row is judged alone, so a refused row drops no other. A row is named by its position. A collections file with no readable list of plans has no
+    rows here: its binding and the check of what its readers need name it."""
     try:
-        for plan in read_json(root, AUTHORED["collections"]).get("plans", []):
-            found.update((plan["path"], lock_of(plan["path"])))
-    except (RegistryFileError, AttributeError, KeyError, TypeError, ValueError):
-        pass
-    return found
+        document = read_json(root, AUTHORED["collections"])
+    except RegistryFileError:
+        document = None
+    rows = document.get("plans") if isinstance(document, Mapping) else None
+    paths: set[str] = set()
+    refused: list[Problem] = []
+    for number, row in enumerate(rows if isinstance(rows, list) else []):
+        path: Any = row.get("path") if isinstance(row, Mapping) else None
+        if not is_plan_name(path):
+            refused.append(Problem("I1", f"{AUTHORED['collections']} plans/{number}", NO_PLAN_NAME))
+        elif path in paths:
+            refused.append(Problem("I1", f"{AUTHORED['collections']} plans/{number}", "repeats the plan path of an earlier row"))
+        else:
+            paths.add(path)
+    return ClassifiedPlans(frozenset(name for path in paths for name in (path, lock_of(path))), refused)
 
 
 def bound_digest(root: Path, name: str, plans: Collection[str]) -> str:
@@ -256,15 +285,16 @@ def bound_digest(root: Path, name: str, plans: Collection[str]) -> str:
     return sha256_bytes(records.read(root, name, "a classified plan") if name in plans else (root / name).read_bytes())
 
 
-def bound_paths(root: Path) -> list[str]:
+def bound_paths(root: Path, plans: Collection[str]) -> list[str]:
     """Every file the lock binds: the authored files and schemas, the frozen inputs, the baseline run, and the runtime's and the classified plans, each with
-    its companion lock. A required schema, a plan or a lock is bound whether or not the tree holds it, so a missing one fails by name."""
+    its companion lock. ``plans`` is the names of :func:`classified_plans`. A required schema, a plan or a lock is bound whether or not the tree holds it, so a
+    missing one fails by name."""
     found = {*AUTHORED.values(), *FROZEN, *map(schema_path, records.REQUIRED_SCHEMAS)}
     for folder in (SCHEMAS, BASELINE):
         found.update(path.relative_to(root).as_posix() for path in (root / folder).rglob("*") if path.is_file())
     for plan in runtime_plans():
         found.update((plan, lock_of(plan)))
-    return sorted(found | classified_plans(root))
+    return sorted(found.union(plans))
 
 
 def load_lock(root: Path, schemas: records.Schemas) -> tuple[dict[str, Any] | None, list[Problem]]:
@@ -295,11 +325,13 @@ def lock_problems(root: Path, schemas: records.Schemas | None = None) -> list[Pr
     """I1: each bound file's SHA-256 equals its lock entry, the lock binds exactly the bound set, lists each file once and names the source registry it binds
     as its parent."""
     schemas = schemas or records.Schemas(root)
+    plans = classified_plans(root)
     lock, problems = load_lock(root, schemas)
+    problems += plans.refused
     if lock is None:
         missing = [Problem("I1", name, "is a required schema the tree does not hold") for name in map(schema_path, records.REQUIRED_SCHEMAS)]
         return [problem for problem in missing if not (root / problem.subject).is_file()] + problems + draft_problems(root, schemas)
-    wanted, bound = set(bound_paths(root)), lock_files(lock)
+    wanted, bound = set(bound_paths(root, plans.names)), lock_files(lock)
     listed = [row["path"] for row in lock["files"]]
     problems += [Problem("I1", name, "is listed by the lock more than once") for name in sorted({name for name in listed if listed.count(name) > 1})]
     parent = lock["parents"]["source_registry"]
@@ -309,10 +341,9 @@ def lock_problems(root: Path, schemas: records.Schemas | None = None) -> list[Pr
         problems.append(Problem("I1", name, "is a bound file the lock does not list: regenerate the lock and review it"))
     for name in sorted(set(bound) - wanted):
         problems.append(Problem("I1", name, "is listed by the lock but is not a bound file"))
-    plans = classified_plans(root)
     for name in sorted(wanted & set(bound)):
         try:
-            actual = bound_digest(root, name, plans)
+            actual = bound_digest(root, name, plans.names)
         except records.Refusal:
             problems.append(Problem("I1", name, f"is bound by the lock but cannot be read: it {NO_PLAN_FILE}"))
             continue
@@ -935,12 +966,14 @@ def build_lock(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
     unreadable = records.Schemas(root).needs_errors("collections", collections)
     if unreadable:
         raise RegistryFileError(f"{AUTHORED['collections']} {unreadable[0]}")
+    plans = classified_plans(root)
+    if plans.refused:
+        raise RegistryFileError("; ".join(map(str, plans.refused)))
     digest = map_digest(root)
     files: dict[str, str] = {}
-    plans = classified_plans(root)
-    for name in bound_paths(root):
+    for name in bound_paths(root, plans.names):
         try:
-            files[name] = bound_digest(root, name, plans)
+            files[name] = bound_digest(root, name, plans.names)
         except records.Refusal:
             raise RegistryFileError(f"{name} is a bound file and cannot be read: it {NO_PLAN_FILE}") from None
         except (OSError, ValueError) as error:
