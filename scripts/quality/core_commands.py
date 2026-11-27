@@ -1,6 +1,6 @@
 """Guard that every command of the Core check groups runs exactly once, in exactly one hosted Core part.
 
-The hosted Core work is fourteen jobs (the ``parts`` of ``config/quality/ci_groups.json``), and ``scripts/run_ci.sh`` runs the same groups locally. A command
+The hosted Core work is fifteen jobs (the ``parts`` of ``config/quality/ci_groups.json``), and ``scripts/run_ci.sh`` runs the same groups locally. A command
 moves between group files when a group is split, so a command could be dropped or run twice without any test noticing. This guard reads every
 ``timed "<label>" <command>`` line of the body files of the Core groups and compares the list with the committed inventory
 ``config/quality/core_commands.json``:

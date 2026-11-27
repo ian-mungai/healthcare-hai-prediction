@@ -275,6 +275,23 @@
       "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
       "^scripts/ci/groups/configuration_owner_checks\\.sh$"
     ],
+    "registry_checks": [
+      "^scripts/(infrastructure|quality|training)/",
+      "^monitoring/",
+      "^data_contracts/monitoring/",
+      "^data_contracts/infrastructure/",
+      "^dags/drift_monitoring_dag\\.py$",
+      "^orchestration/launcher\\.py$",
+      "^\\.dvc(ignore)?(/|$)",
+      "^tests/",
+      "^config/",
+      "^infra/",
+      "^monitoring/",
+      "^\\.env\\.example$",
+      "^orchestration/layer_report\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
+      "^scripts/ci/groups/registry_checks\\.sh$"
+    ],
     "sql_style": [
       "^dbt/",
       "^\\.sqlfluff$",
@@ -456,6 +473,11 @@
       "minutes": 45,
       "cores": 2
     },
+    "registry_checks": {
+      "job": "Core Registry Checks",
+      "minutes": 55,
+      "cores": 1
+    },
     "sql_style": {
       "job": "Core SQL and Terraform Checks",
       "minutes": 30,
@@ -635,6 +657,9 @@
     ],
     "core_configuration_owner": [
       "configuration_owner_checks"
+    ],
+    "core_registry": [
+      "registry_checks"
     ],
     "core_ci_tooling": [
       "ci_tooling_checks"

@@ -234,6 +234,7 @@ CORE = [
     "configuration_policy_checks",
     "configuration_host_checks",
     "configuration_owner_checks",
+    "registry_checks",
     "sql_style",
     "terraform_checks",
     "terraform_services_checks",
@@ -248,6 +249,7 @@ SPLIT_FROM = {
     "configuration_host_checks": "configuration_checks",
     "configuration_policy_checks": "configuration_checks",
     "configuration_owner_checks": "configuration_host_checks",
+    "registry_checks": "configuration_policy_checks",
     "terraform_proofs": "terraform_checks",
     "terraform_services_checks": "terraform_checks",
     "terraform_replace_proofs": "terraform_proofs",
@@ -2401,8 +2403,22 @@ def core_scratch(root: Path) -> Path:
     return root
 
 
+def registry_split_case() -> dict[str, Any]:
+    """The test files that the general pytest run leaves out are the files the registry group runs, so no test file runs twice or not at all."""
+    groups = core_commands.inventory(ROOT)
+
+    def pytest_words(group: str) -> list[str]:
+        return [word for command in groups.get(group, []) if " -m pytest " in command for word in shlex.split(command)]
+
+    ignored = [word.removeprefix("--ignore-glob=") for word in pytest_words("configuration_policy_checks") if word.startswith("--ignore-glob=")]
+    named = [word for word in pytest_words("registry_checks") if word.startswith("tests/")]
+    left_out = sorted(path.relative_to(ROOT).as_posix() for pattern in ignored for path in ROOT.glob(pattern))
+    run = sorted(path.relative_to(ROOT).as_posix() for pattern in named for path in ROOT.glob(pattern))
+    return {"case": "registry_tests_run_in_the_registry_group_only", "passed": bool(left_out) and run == left_out, "left_out": left_out, "run": run}
+
+
 def core_command_cases() -> list[dict[str, Any]]:
-    """Every Core command runs once, in one of the fourteen hosted Core parts, and the guard fails on a dropped or a duplicated command."""
+    """Every Core command runs once, in one of the fifteen hosted Core parts, and the guard fails on a dropped or a duplicated command."""
     cases: list[dict[str, Any]] = [
         {"case": "core_commands_run_exactly_once", "passed": not core_commands.findings(ROOT), "findings": core_commands.findings(ROOT)}
     ]
@@ -2431,12 +2447,13 @@ def core_command_cases() -> list[dict[str, Any]]:
     )
     cases.append(
         {
-            "case": "fourteen_hosted_core_jobs_run_the_fourteen_parts",
-            "passed": len(config.get("parts", {})) == 14 and hosted == sorted(config.get("parts", {})),
+            "case": "fifteen_hosted_core_jobs_run_the_fifteen_parts",
+            "passed": len(config.get("parts", {})) == 15 and hosted == sorted(config.get("parts", {})),
             "parts": sorted(config.get("parts", {})),
             "hosted": hosted,
         }
     )
+    cases.append(registry_split_case())
     first_group = next(iter(core_commands.inventory(ROOT)))
     plants = {
         "dropped_command_is_found": ("dropped command", lambda root: drop_first_command(root, first_group)),
@@ -4182,6 +4199,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
                 "configuration_policy_checks",
                 "configuration_host_checks",
                 "configuration_owner_checks",
+                "registry_checks",
             ]
         )
     ]
@@ -4444,6 +4462,7 @@ BODY_SELECTION = {
     "configuration_policy_checks": ["configuration_policy_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "configuration_host_checks": ["configuration_host_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "configuration_owner_checks": ["configuration_owner_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "registry_checks": ["registry_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "sql_style": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "sql_style"],
     "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_checks"],
     "terraform_services_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_services_checks"],

@@ -18,6 +18,7 @@
   "Core Configuration Policy Checks",
   "Core Configuration Host Checks",
   "Core Configuration Owner and Catalog Checks",
+  "Core Registry Checks",
   "Core CI Tooling Checks",
   "Core CI Tooling Runtime Checks",
   "Core Code Rules",

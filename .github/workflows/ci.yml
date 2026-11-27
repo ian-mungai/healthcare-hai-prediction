@@ -329,7 +329,7 @@ jobs:
   core:
     name: ${{ matrix.title }}
     runs-on: ubuntu-24.04
-    # The former Local CI Core job is fourteen jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
+    # The former Local CI Core job is fifteen jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
     # suites of its groups and splits no command and no scenario; config/quality/core_commands.json lists every command and the CI groups E2E fails on a dropped or a
     # duplicated one. The wall time beside each timeout is an estimate until a complete hosted run of the new jobs exists: the longest group of the part from the
     # command seconds of the last complete hosted run of the former job (run 41521618599 of pull request 72, where all its groups ran together, so the figure is an
@@ -354,13 +354,16 @@ jobs:
             timeout: 30  # wall time 17 min, estimate: 10 commands, 760 s hosted (Nov 21 2026: infrastructure E2E 406 s); the policy, monitoring, DVC, drift and pytest commands are Core Configuration Policy Checks
           - part: core_configuration_policy
             title: Core Configuration Policy Checks
-            timeout: 30  # wall time 17 min, estimate: 10 commands, about 790 s hosted (Nov 21 2026: policy E2E 350 s, monitoring files E2E 146 s)
+            timeout: 30  # wall time 17 min, estimate: 10 commands, about 790 s hosted (Nov 21 2026: policy E2E 350 s, monitoring files E2E 146 s); the ingestion registry tests are Core Registry Checks, and run 45859948234 (Nov 26 2026), before those tests, took 16.9 min
           - part: core_configuration_host
             title: Core Configuration Host Checks
             timeout: 30  # wall time 16 min, estimate: 10 commands, 757 s hosted (Nov 21 2026: IAM preflight E2E 698 s); the owner scripts, host session plants, catalog and Glue mirror E2Es are Core Configuration Owner and Catalog Checks
           - part: core_configuration_owner
             title: Core Configuration Owner and Catalog Checks
             timeout: 45  # wall time 24 to 27 min on hosted runs (Nov 26 2026), one run passed 30; estimate: 4 commands, 784 s hosted (Nov 21 2026: host session plants 320 s, owner scripts E2E, AWS catalog setup E2E 157 s)
+          - part: core_registry
+            title: Core Registry Checks
+            timeout: 55  # wall time 25 min, estimate: the ingestion registry tests took 646 s on the Mac (Nov 27 2026) and ran at 2.0 times that hosted (run 46065260865, about 1,290 s) plus about 3.5 minutes of setup and gates; 2.2 times the estimate
           - part: core_terraform_proofs
             title: Core Terraform Proof Checks
             timeout: 30  # wall time 18 min, estimate: retired definitions proof 849 s hosted (Nov 21 2026) plus about 3.5 minutes of setup and gates

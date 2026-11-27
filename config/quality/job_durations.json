@@ -102,7 +102,13 @@
       "job": "Core Configuration Policy Checks",
       "measured_minutes": 17,
       "timeout_minutes": 30,
-      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 10 commands, about 790 s (policy E2E 350 s, monitoring files E2E 146 s, drift monitoring E2E 81 s; the task cleanup E2Es and the pytest run are the Nov 18 2026 times of run 44230499285 scaled by 1.4) plus about 4 minutes of setup and gates"
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 10 commands, about 790 s (policy E2E 350 s, monitoring files E2E 146 s, drift monitoring E2E 81 s; the task cleanup E2Es and the pytest run are the Nov 18 2026 times of run 44230499285 scaled by 1.4) plus about 4 minutes of setup and gates; the ingestion registry tests are Core Registry Checks, and hosted run 45859948234 (Nov 26 2026), before those tests, took 16.9 minutes"
+    },
+    {
+      "job": "Core Registry Checks",
+      "measured_minutes": 25,
+      "timeout_minutes": 55,
+      "basis": "estimate, the ingestion registry tests took 646 s on the Mac (Nov 27 2026, 237 tests, load 9 to 16); hosted run 46065260865 ran them at 2.0 times the Mac time with coverage on (73 tests in 241 s against 119 s, the next 72 in 726 s against 369 s), so about 1,290 s plus about 3.5 minutes of setup and gates; resize it from the first complete hosted run"
     },
     {
       "job": "Core Configuration Host Checks",
