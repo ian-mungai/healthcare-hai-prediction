@@ -68,7 +68,7 @@ def test_files_that_only_look_right_change_no_count(tmp_path: Path) -> None:
 
 
 def test_every_open_item_names_the_step_it_waits_for(tmp_path: Path) -> None:
-    """Each open item of the committed report says what it waits for, by a step of the addendum's producer table, the lead or the owner."""
+    """Each open item of the committed report says what it waits for: a step that produces the records, the lead or the owner."""
     lines = release(fresh_copy(tmp_path / "committed")).readiness
     for item in lines:
         check("waiting" in item, f"An open item does not say what it waits for: {item}")

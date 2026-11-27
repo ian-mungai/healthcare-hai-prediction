@@ -4,6 +4,9 @@
 ``check --release`` adds the usable-input readiness predicates R1 to R5. Both always print a READINESS block. Nothing here reads S3 or the network, and
 nothing in the live pipeline calls it: it reads files and writes only ``registry.lock.json`` (``lock``) and ``unit_golden.json`` (``golden``).
 
+Both commands derive the bronze scope from the checked tree's own dbt project (``scripts.ingestion.scope``). A supplied scope report is only compared with the
+derived one: a difference is an I1 problem and a report that is no JSON object is an I2 problem. The schemas are the checked tree's own.
+
 Commands (the exit code is 0 for a pass, 1 for named problems and 2 when the check cannot run)::
 
     python -m scripts.ingestion.registry check [--release] [--root DIR] [--scope-report FILE]
@@ -27,17 +30,18 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from jsonschema import Draft202012Validator
-
 from scripts.acquisition import (
+    ahrq_compendium_contract,
     capture_mode,
     cms_owners_contract,
     hcai_util_contract,
+    hud_xlsx_contract,
     manual_content,
     onc_mu_contract,
     redownload,
     storage_controls,
     stored_mirror,
+    wonder_export_contract,
 )
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
@@ -47,7 +51,8 @@ from scripts.infrastructure import startup_check
 from scripts.ingestion import registry_readiness, scope
 from scripts.ingestion import registry_records as records
 from scripts.ingestion.registry_model import MANUAL_ROUTE, Output, Problem, RegistryFileError, Result, Tree, canonical, default_scope, sha256_bytes
-from scripts.lakehouse import bronze
+from scripts.lakehouse import bronze, dbt_package_archive
+from scripts.quality import dbt_manifest_labels
 
 ROOT = Path(__file__).resolve().parents[2]
 INGESTION = "config/ingestion"
@@ -71,6 +76,14 @@ AUTHORED = {
     "layout_contracts": f"{INGESTION}/layout_contracts.json",
     "unit_golden": f"{INGESTION}/unit_golden.json",
 }
+# The folders of a dbt project that the parse does not read: it installs packages and writes its outputs in a scratch folder.
+NOT_PARSE_INPUTS = frozenset({"dbt_packages", "target", "logs"})
+# The report bytes derived in this process, by the digest of the parse inputs.
+PARSED: dict[str, bytes] = {}
+# No scope report was supplied. None is a supplied value: a report that is the JSON null.
+NOT_SUPPLIED: Any = object()
+# What reading inputs of a wrong shape raises.
+INPUT_ERRORS = (RegistryFileError, scope.ScopeError, capture_mode.SpecError, AttributeError, KeyError, TypeError, ValueError)
 FROZEN = (TABLE_MAP, RETIRED_OBJECTS, LEAVING_RECORD, LAYOUT, SOURCE_REGISTRY, SEED_MANIFEST)
 STEP = re.compile(r"S(?:0|1|2|3|4|5|6a|6b|7|8|8a|9|10|11|12|13a|13b|14)")
 STEP_LIST = re.compile(rf"{STEP.pattern}(?:, {STEP.pattern})*")
@@ -116,6 +129,14 @@ ENTRY_POINTS = (
 )
 
 
+class LockRefused(Exception):
+    """The lock command writes nothing: the problems say why."""
+
+    def __init__(self, problems: list[Problem]) -> None:
+        super().__init__("; ".join(map(str, problems)))
+        self.problems = problems
+
+
 def encode(document: Mapping[str, Any]) -> bytes:
     """A registry file as written: sorted keys, two-space indent, one trailing newline."""
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
@@ -136,41 +157,92 @@ def map_digest(root: Path) -> str:
     return sha256_bytes(json.dumps(scope.load_map(root / TABLE_MAP), sort_keys=True, separators=(",", ":")).encode())
 
 
-def version_hashes(version: Mapping[str, Any]) -> dict[str, str]:
-    """The path to SHA-256 map of one committed version, in either of the two forms the lists use."""
-    listed = version["code_sha256"]
-    return dict(listed) if isinstance(listed, dict) else {row["file"]: row["sha256"] for row in listed}
+def parse_inputs_digest(root: Path) -> str:
+    """One digest of what the scope of a tree is derived from: the files of its dbt project, its table map and its package record."""
+    project = root / "dbt"
+    found = [path for path in sorted(project.rglob("*")) if path.is_file() and not NOT_PARSE_INPUTS & set(path.relative_to(project).parts)]
+    found += [root / TABLE_MAP, root / dbt_package_archive.RECORD]
+    return sha256_bytes(canonical([[path.relative_to(root).as_posix(), sha256_bytes(path.read_bytes()) if path.is_file() else None] for path in found]))
+
+
+def derived_scope(root: Path) -> dict[str, Any]:
+    """The scope report of the tree's own dbt project: the one scope both commands use. A process parses each distinct set of parse inputs once."""
+    root = root.resolve()
+    key = parse_inputs_digest(root)
+    if key not in PARSED:
+        report, problems, _ = scope.scope_of_project(root / "dbt", root / TABLE_MAP, root)
+        if problems:
+            raise scope.ScopeError("; ".join(problems))
+        PARSED[key] = scope.report_bytes(report)
+    return json.loads(PARSED[key])
+
+
+def read_supplied(path: Path) -> Any:
+    """The value of a supplied scope report. Text that is not JSON reads as None, which the comparison refuses as no JSON object."""
+    try:
+        return json.loads(path.read_bytes())
+    except (ValueError, RecursionError):
+        return None
+
+
+def supplied_scope_problems(derived: Mapping[str, Any], supplied: Any) -> list[Problem]:
+    """A supplied scope report is compared with the derived one and never used: a difference is an I1 problem."""
+    if supplied is NOT_SUPPLIED:
+        return []
+    if not isinstance(supplied, Mapping):
+        return [Problem("I2", "scope report", "is not a JSON object")]
+    try:
+        same = scope.report_bytes(supplied) == scope.report_bytes(derived)
+    except (TypeError, ValueError, RecursionError):
+        same = False
+    return [] if same else [Problem("I1", "scope report", "differs from the report derived from the tree's dbt project, which is the one used")]
+
+
+def lock_of(plan: str) -> str:
+    """The companion lock of a plan, by the name its loader reads."""
+    return Path(plan).with_suffix(".lock.json").as_posix()
+
+
+def runtime_plans() -> list[str]:
+    """The locked plans the runtime's own lists name: each plan-based collector's (``startup_check.PLAN_PATHS``) and each manual content handler's."""
+    paths = [path for plans in startup_check.PLAN_PATHS.values() for path in plans()]
+    paths += [contract.PLAN_PATH for contract in (hud_xlsx_contract, wonder_export_contract, ahrq_compendium_contract)]
+    return sorted({path.relative_to(ROOT).as_posix() for path in paths})
 
 
 def bound_paths(root: Path) -> list[str]:
-    """Every file the lock binds: the authored files and schemas, the frozen inputs, the baseline run and the classified plans."""
+    """Every file the lock binds: the authored files and schemas, the frozen inputs, the baseline run, and the runtime's and the classified plans, each with
+    its companion lock. A plan or a lock is bound whether or not the tree holds it, so a missing one fails by name."""
     found = {*AUTHORED.values(), *FROZEN}
     for folder in (SCHEMAS, BASELINE):
         found.update(path.relative_to(root).as_posix() for path in (root / folder).rglob("*") if path.is_file())
+    for plan in runtime_plans():
+        found.update((plan, lock_of(plan)))
     try:
         for plan in read_json(root, AUTHORED["collections"]).get("plans", []):
-            for name in (plan["path"], plan["path"].replace(".json", ".lock.json")):
-                if (root / name).is_file():
-                    found.add(name)
-    except (RegistryFileError, AttributeError, KeyError, TypeError):
+            found.update((plan["path"], lock_of(plan["path"])))
+    except (RegistryFileError, AttributeError, KeyError, TypeError, ValueError):
         pass
     return sorted(found)
 
 
-def load_lock(root: Path) -> tuple[dict[str, Any] | None, list[Problem]]:
+def load_lock(root: Path, schemas: records.Schemas) -> tuple[dict[str, Any] | None, list[Problem]]:
     """The lock document, or the problem that names why it cannot be used."""
     try:
         lock = read_json(root, LOCK)
     except RegistryFileError as error:
         text = f"{LOCK} is missing: run the lock command" if not (root / LOCK).exists() else str(error)
         return None, [Problem("lock", LOCK, text)]
-    errors = schema_errors(root, "registry_lock", lock)
+    errors = schema_errors(schemas, "registry_lock", lock)
     return (None, [Problem("I2", LOCK, text) for text in errors]) if errors else (lock, [])
 
 
-def schema_errors(root: Path, name: str, document: Any) -> list[str]:
+def schema_errors(schemas: records.Schemas, name: str, document: Any) -> list[str]:
     """The first few places a document breaks its JSON schema, as positions and keywords only: no input value reaches a diagnostic."""
-    return records.describe_errors(Draft202012Validator(read_json(root, f"{SCHEMAS}/{name}.schema.json")), document, limit=5)
+    try:
+        return schemas.errors(name, document, limit=5)
+    except records.Refusal as refusal:
+        return [str(refusal)]
 
 
 def lock_files(lock: Mapping[str, Any]) -> dict[str, str]:
@@ -178,12 +250,18 @@ def lock_files(lock: Mapping[str, Any]) -> dict[str, str]:
     return {row["path"]: row["sha256"] for row in lock["files"]}
 
 
-def lock_problems(root: Path) -> list[Problem]:
-    """I1: each bound file's SHA-256 equals its lock entry, and the lock binds exactly the bound set."""
-    lock, problems = load_lock(root)
+def lock_problems(root: Path, schemas: records.Schemas | None = None) -> list[Problem]:
+    """I1: each bound file's SHA-256 equals its lock entry, the lock binds exactly the bound set, lists each file once and names the source registry it binds
+    as its parent."""
+    lock, problems = load_lock(root, schemas or records.Schemas(root))
     if lock is None:
         return problems
     wanted, bound = set(bound_paths(root)), lock_files(lock)
+    listed = [row["path"] for row in lock["files"]]
+    problems += [Problem("I1", name, "is listed by the lock more than once") for name in sorted({name for name in listed if listed.count(name) > 1})]
+    parent = lock["parents"]["source_registry"]
+    if (parent["path"], parent["sha256"]) != (SOURCE_REGISTRY, bound.get(SOURCE_REGISTRY)):
+        problems.append(Problem("I1", "source registry parent", f"differs from the lock's own entry for {SOURCE_REGISTRY} (path or digest)"))
     for name in sorted(wanted - set(bound)):
         problems.append(Problem("I1", name, "is a bound file the lock does not list: regenerate the lock and review it"))
     for name in sorted(set(bound) - wanted):
@@ -199,8 +277,9 @@ def lock_problems(root: Path) -> list[Problem]:
     return problems
 
 
-def load_tree(root: Path, lock: dict[str, Any]) -> Tree:
-    """Read every input once. A file that cannot be read raises RegistryFileError naming it."""
+def load_inputs(root: Path, lock: dict[str, Any]) -> Tree:
+    """The queue, the capture specifications, the routes, the table map and the frozen records: what readiness is computed from. The authored files stay empty
+    until :func:`load_authored`. A file that cannot be read raises RegistryFileError naming it."""
     queue, specs = read_json(root, QUEUE), read_json(root, SPECS)
     layout = read_json(root, LAYOUT)
     routes = {source: f"{group['publisher']}/{group['collection']}" for group in layout["groups"] for source in group["source_ids"]}
@@ -210,14 +289,23 @@ def load_tree(root: Path, lock: dict[str, Any]) -> Tree:
         specs=specs["specs"],
         routes=routes,
         tables=scope.load_map(root / TABLE_MAP)["tables"],
-        collections=read_json(root, AUTHORED["collections"]),
-        golden=read_json(root, AUTHORED["unit_golden"]),
-        manual=read_json(root, AUTHORED["manual_outcomes"]),
-        contracts=read_json(root, AUTHORED["layout_contracts"]),
+        collections={},
+        golden={},
+        manual={},
+        contracts={},
         lock=lock,
         source_registry=read_json(root, SOURCE_REGISTRY),
         leaving=frozenset(row["collection"] for row in read_json(root, LEAVING_RECORD)["tables"]),
     )
+
+
+def load_authored(tree: Tree) -> Tree:
+    """Add the authored files to a tree of inputs."""
+    tree.collections = read_json(tree.root, AUTHORED["collections"])
+    tree.golden = read_json(tree.root, AUTHORED["unit_golden"])
+    tree.manual = read_json(tree.root, AUTHORED["manual_outcomes"])
+    tree.contracts = read_json(tree.root, AUTHORED["layout_contracts"])
+    return tree
 
 
 def unit_class(unit: Mapping[str, Any]) -> str:
@@ -329,15 +417,16 @@ def selections(tree: Tree, outputs: Sequence[Output]) -> list[list[str]]:
     ]
 
 
-def computed_gaps(tree: Tree, report: Mapping[str, Any], outputs: Sequence[Output], picked: Sequence[Sequence[str]]) -> list[dict[str, str]]:
-    """The default-scope tables no queued output selects, each with its kind and its authored migration step."""
+def unselected(scope_tables: Mapping[str, str], picked: Sequence[Sequence[str]]) -> list[str]:
+    """The default-scope tables no queued output selects."""
     selected = {table for tables in picked for table in tables}
+    return sorted(table for table in scope_tables if table not in selected)
+
+
+def computed_gaps(tree: Tree, scope_tables: Mapping[str, str], picked: Sequence[Sequence[str]]) -> list[dict[str, str]]:
+    """The gap tables, each with its kind and its authored migration step."""
     labels = tree.collections["gaps"]
-    return [
-        {"table": table, "kind": kind, "step": labels.get(table, {}).get("step", "")}
-        for table, kind in sorted(default_scope(report).items())
-        if table not in selected
-    ]
+    return [{"table": table, "kind": scope_tables[table], "step": labels.get(table, {}).get("step", "")} for table in unselected(scope_tables, picked)]
 
 
 def gap_problems(tree: Tree, gaps: list[dict[str, str]]) -> list[Problem]:
@@ -361,6 +450,15 @@ def gap_problems(tree: Tree, gaps: list[dict[str, str]]) -> list[Problem]:
         if not STEP_LIST.fullmatch(gap["step"]):
             problems.append(Problem("I8", table, f"has migration label {gap['step']!r}, which is not a step of design v4 section 8"))
     return problems
+
+
+def marked_outputs(tree: Tree, outputs: Sequence[Output]) -> dict[str, int]:
+    """The outputs the check cannot decide offline: archive members and outputs of collections whose tables select by dataset ID."""
+    with_ids = {table["collection"] for table in tree.tables if "dataset_ids" in table}
+    return {
+        "archive_members": sum(1 for item in outputs if item.archive),
+        "dataset_id_collections": sum(1 for item in outputs if not item.archive and item.collection in with_ids),
+    }
 
 
 def route_problems(tree: Tree, outputs: Sequence[Output], picked: Sequence[Sequence[str]], pinned: Collection[str]) -> tuple[list[Problem], dict[str, Any]]:
@@ -389,12 +487,8 @@ def route_problems(tree: Tree, outputs: Sequence[Output], picked: Sequence[Seque
                     f"{len(wrong)} of {len(found)} declared outputs select {', '.join(seen) or 'no table'}, not {feed['table']}, and it is not a pinned gap",
                 )
             )
-    with_ids = {table["collection"] for table in tree.tables if "dataset_ids" in table}
     facts = {
-        "marked_outputs": {
-            "archive_members": sum(1 for item in outputs if item.archive),
-            "dataset_id_collections": sum(1 for item in outputs if not item.archive and item.collection in with_ids),
-        },
+        "marked_outputs": marked_outputs(tree, outputs),
         "document_outputs_unselected": sum(1 for number, item in enumerate(outputs) if item.role == "methodology" and not picked[number] and number not in fed),
         "feeds": len(tree.collections["feeds"]),
     }
@@ -471,7 +565,7 @@ def closure_problems(root: Path) -> list[Problem]:
     return problems
 
 
-def validate_documents(root: Path, tree: Tree) -> list[Problem]:
+def validate_documents(tree: Tree, schemas: records.Schemas) -> list[Problem]:
     """I2: the authored files validate against their schemas. The layout contracts are the I12 row, so their schema failures carry that name.
 
     The evidence file is not read here. It closes no readiness item: the lock binds its bytes and the readiness report judges its shape."""
@@ -484,8 +578,19 @@ def validate_documents(root: Path, tree: Tree) -> list[Problem]:
     return [
         Problem("I12" if name == "layout_contracts" else "I2", AUTHORED[name], text)
         for name, document in documents.items()
-        for text in schema_errors(root, name, document)
+        for text in schema_errors(schemas, name, document)
     ]
+
+
+def pattern_error(pattern: str) -> str | None:
+    """Why a pattern of an authored file does not compile, or None. Deep nesting and a huge repeat count raise their own errors, not ``re.error``."""
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        return str(error)
+    except (RecursionError, OverflowError) as error:
+        return type(error).__name__
+    return None
 
 
 def authored_problems(tree: Tree) -> list[Problem]:
@@ -523,11 +628,11 @@ def authored_problems(tree: Tree) -> list[Problem]:
                 problems.append(
                     Problem("I2", source["source_id"], "decision_ref is not the hash of the registry's effective closeout decision for this source")
                 )
-            for pattern in source.get("match", {}).values():
-                try:
-                    re.compile(pattern)
-                except re.error as error:
-                    problems.append(Problem("I2", source["source_id"], f"closure match pattern is not a regular expression: {error}"))
+            problems += [
+                Problem("I2", source["source_id"], f"closure match pattern is not a regular expression: {error}")
+                for error in map(pattern_error, source.get("match", {}).values())
+                if error
+            ]
             if source["acquisition"] == "closed_partial" and ref is None:
                 problems.append(Problem("I2", source["source_id"], "is closed_partial and needs a decision_ref"))
     manual = {row["unit"] for row in tree.golden["units"] if row["class"] == "manual"}
@@ -540,18 +645,14 @@ def authored_problems(tree: Tree) -> list[Problem]:
             problems.append(Problem("I2", feed["table"], "is the table of a declared feed but is not in the table map"))
         if feed["source_id"] not in tree.routes:
             problems.append(Problem("I2", feed["table"], f"declares a feed from {feed['source_id']}, which the collection layout does not route"))
-        try:
-            re.compile(feed["name_regex"])
-        except re.error as error:
+        error = pattern_error(feed["name_regex"])
+        if error:
             problems.append(Problem("I2", feed["table"], f"declared feed pattern is not a regular expression: {error}"))
     for table, gap in tree.collections["gaps"].items():
         if table not in mapped:
             problems.append(Problem("I2", table, "has a gap record but is not in the table map"))
         if not STEP_LIST.fullmatch(gap["step"]):
             problems.append(Problem("I8", table, f"has migration label {gap['step']!r} in collections.json, which is not a step of design v4 section 8"))
-    for plan in tree.collections["plans"]:
-        if not (tree.root / plan["path"]).is_file():
-            problems.append(Problem("I2", plan["path"], "is a classified plan that is not on disk"))
     recorded_decisions = tree.lock.get("decisions", {})
     for name, record in tree.collections["decisions"].items():
         if recorded_decisions.get(name) != {"value": record["value"], "record_sha256": sha256_bytes(canonical(record))}:
@@ -618,28 +719,44 @@ def contract_problems(tree: Tree) -> list[Problem]:
     return problems
 
 
-def integrity(root: Path, report: Mapping[str, Any], seats: Mapping[str, Iterable[str]] | None = None, skip: frozenset[str] = frozenset()) -> Result:
-    """Every integrity predicate over a tree whose lock is bound. ``skip`` names predicates a test leaves out; the command never skips."""
+def integrity(
+    root: Path, report: Mapping[str, Any], schemas: records.Schemas, seats: Mapping[str, Iterable[str]] | None = None, skip: frozenset[str] = frozenset()
+) -> Result:
+    """Every integrity predicate over a tree whose lock is bound. ``skip`` names predicates a test leaves out; the command never skips.
+
+    The readiness obligations are computed first, from the queue, the table map and the scope, so no authored file that fails a predicate removes one. The
+    shape lines about the authored and supplied files are made once the authored files pass their schemas."""
     result = Result()
-    lock, problems = load_lock(root)
+    lock, problems = load_lock(root, schemas)
     if lock is None:
         result.problems = problems
         return result
+    scope_tables = default_scope(report)
     try:
-        tree = load_tree(root, lock)
-    except (RegistryFileError, KeyError, TypeError, ValueError, scope.ScopeError) as error:
-        result.problems = [Problem("I2", "inputs", f"cannot be read: {error}")]
+        tree = load_inputs(root, lock)
+        outputs = unit_outputs(tree)
+        picked = selections(tree, outputs)
+        assessment = registry_readiness.obligations(tree.units, tree.tables, scope_tables, unselected(scope_tables, picked), marked_outputs(tree, outputs))
+    except INPUT_ERRORS as error:
+        result.problems = [Problem("I2", "inputs", f"cannot be read: {type(error).__name__}: {error}")]
         return result
-    result.problems += validate_documents(root, tree)
-    if result.problems:
+    result.readiness, result.release_problems = assessment.items, assessment.problems
+    result.problems += [Problem("I2", f"{SCHEMAS}/{name}.schema.json", reason) for name, reason in sorted(schemas.unusable.items())]
+    try:
+        load_authored(tree)
+    except RegistryFileError as error:
+        result.problems.append(Problem("I2", "inputs", f"cannot be read: {error}"))
         return result
+    invalid = validate_documents(tree, schemas)
+    result.problems += invalid
+    if invalid:
+        return result
+    result.notes = registry_readiness.observations(tree, scope_tables, schemas)
     result.problems += authored_problems(tree) + contract_problems(tree)
     if result.problems:
         return result
     result.problems += unit_problems(tree) + source_problems(tree)
-    outputs = unit_outputs(tree)
-    picked = selections(tree, outputs)
-    result.gaps = computed_gaps(tree, report, outputs, picked)
+    result.gaps = computed_gaps(tree, scope_tables, picked)
     result.problems += gap_problems(tree, result.gaps)
     routing, routing_facts = route_problems(tree, outputs, picked, {gap["table"] for gap in tree.lock["pins"]["gaps"]})
     result.problems += routing
@@ -648,43 +765,34 @@ def integrity(root: Path, report: Mapping[str, Any], seats: Mapping[str, Iterabl
     if "I6" not in skip:
         result.problems += closure_problems(root)
     result.facts = {"outputs": len(outputs), "units": len(tree.units), **routing_facts}
-    assessment = registry_readiness.assess(tree, report, result.gaps, result.facts)
-    result.readiness, result.release_problems, result.notes = assessment.items, assessment.problems, assessment.notes
     return result
-
-
-def scope_report_for(root: Path, supplied: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The scope report of the tree: the supplied one, or a fresh pinned dbt parse of the tree's own project."""
-    if supplied is not None:
-        return dict(supplied)
-    report, problems, _ = scope.scope_of_project(root / "dbt", root / TABLE_MAP, root)
-    if problems:
-        raise scope.ScopeError("; ".join(problems))
-    return report
 
 
 def check(
     root: Path,
     *,
     release: bool = False,
-    scope_report: Mapping[str, Any] | None = None,
+    scope_report: Any = NOT_SUPPLIED,
     seats: Mapping[str, Iterable[str]] | None = None,
     skip: frozenset[str] = frozenset(),
 ) -> Result:
     """Run the integrity predicates (and, with ``release``, the readiness predicates) over a tree. Reads files only."""
     result = Result()
-    result.problems = lock_problems(root)
+    schemas = records.Schemas(root)
+    result.problems = lock_problems(root, schemas)
     if result.problems:
         return result
-    report = scope_report_for(root, scope_report)
+    report = derived_scope(root)
+    refused = supplied_scope_problems(report, scope_report)
     lock = read_json(root, LOCK)
     if sha256_bytes(scope.report_bytes(report)) != lock["scope_report_sha256"]:
-        result.problems.append(Problem("I1", "scope report", "differs from the lock: the default scope changed, regenerate the lock and review it"))
+        result.problems = [*refused, Problem("I1", "scope report", "differs from the lock: the default scope changed, regenerate the lock and review it")]
         return result
     if report["inputs"]["table_map_sha256"] != lock["map_sha256"]:
-        result.problems.append(Problem("I1", "scope report", "was derived from another table map than the lock binds"))
+        result.problems = [*refused, Problem("I1", "scope report", "was derived from another table map than the lock binds")]
         return result
-    result = integrity(root, report, seats, skip)
+    result = integrity(root, report, schemas, seats, skip)
+    result.problems = refused + result.problems
     if release:
         result.problems += result.release_problems
     return result
@@ -694,22 +802,25 @@ def build_lock(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
     """The lock of the tree as it is now: file digests, the scope report digest, the recorded decisions and the pinned gap and seat sets."""
     collections = read_json(root, AUTHORED["collections"])
     digest = map_digest(root)
-    files = {name: sha256_bytes((root / name).read_bytes()) for name in bound_paths(root)}
+    files: dict[str, str] = {}
+    for name in bound_paths(root):
+        try:
+            files[name] = sha256_bytes((root / name).read_bytes())
+        except OSError as error:
+            raise RegistryFileError(f"{name} is a bound file and cannot be read: {error.strerror or type(error).__name__}") from error
     draft = {"map_sha256": digest, "pins": {"map_sha256": digest, "gaps": [], "seat_gaps": {}}}
-    tree = load_tree(root, draft)
-    outputs = unit_outputs(tree)
-    gaps = computed_gaps(tree, report, outputs, selections(tree, outputs))
+    tree = load_authored(load_inputs(root, draft))
+    gaps = computed_gaps(tree, default_scope(report), selections(tree, unit_outputs(tree)))
     for gap in gaps:
         if not STEP_LIST.fullmatch(gap["step"]):
             raise RegistryFileError(f"{AUTHORED['collections']}: gap table {gap['table']} has no valid migration step in its gaps record")
-    registry_path = (root / SOURCE_REGISTRY).relative_to(root).as_posix()
     return {
         "kind": "registry_lock",
         "schema_version": 1,
         "map_sha256": digest,
         "files": [{"path": name, "sha256": digest} for name, digest in sorted(files.items())],
         "scope_report_sha256": sha256_bytes(scope.report_bytes(report)),
-        "parents": {"source_registry": {"path": registry_path, "sha256": files[SOURCE_REGISTRY]}},
+        "parents": {"source_registry": {"path": SOURCE_REGISTRY, "sha256": files[SOURCE_REGISTRY]}},
         "decisions": {
             name: {"value": record["value"], "record_sha256": sha256_bytes(canonical(record))} for name, record in sorted(collections["decisions"].items())
         },
@@ -717,9 +828,13 @@ def build_lock(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_lock(root: Path, scope_report: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Generate the lock from the tree and write it. The only file this module writes."""
-    lock = build_lock(root, scope_report_for(root, scope_report))
+def write_lock(root: Path, scope_report: Any = NOT_SUPPLIED) -> dict[str, Any]:
+    """Generate the lock from the tree and write it, unless a supplied scope report is refused (LockRefused, nothing written)."""
+    report = derived_scope(root)
+    refused = supplied_scope_problems(report, scope_report)
+    if refused:
+        raise LockRefused(refused)
+    lock = build_lock(root, report)
     (root / LOCK).write_bytes(encode(lock))
     return lock
 
@@ -741,7 +856,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("command", choices=("check", "lock", "golden"))
     parser.add_argument("--release", action="store_true", help="also require usable-input readiness")
     parser.add_argument("--root", type=Path, default=ROOT, help="the repository tree to read")
-    parser.add_argument("--scope-report", type=Path, help="a scope report to use instead of a fresh dbt parse")
+    parser.add_argument("--scope-report", type=Path, help="a scope report to compare with the one derived from the tree's dbt project")
     arguments = parser.parse_args(argv)
     arguments.root = arguments.root.resolve()
     try:
@@ -749,13 +864,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             golden = write_golden(arguments.root)
             sys.stdout.write(f"golden list written: {golden['counts']['units']} units\n")
             return 0
-        supplied = json.loads(arguments.scope_report.read_bytes()) if arguments.scope_report else None
+        supplied = read_supplied(arguments.scope_report) if arguments.scope_report else NOT_SUPPLIED
         if arguments.command == "lock":
-            lock = write_lock(arguments.root, supplied)
+            try:
+                lock = write_lock(arguments.root, supplied)
+            except LockRefused as refused:
+                sys.stdout.write("".join(f"{problem}\n" for problem in refused.problems) + "lock: refused, nothing written\n")
+                return 1
             sys.stdout.write(f"lock written: {len(lock['files'])} files, {len(lock['pins']['gaps'])} pinned gaps\n")
             return 0
         result = check(arguments.root, release=arguments.release, scope_report=supplied)
-    except (RegistryFileError, scope.ScopeError, OSError, ValueError) as error:
+    except (RegistryFileError, scope.ScopeError, dbt_manifest_labels.ManifestError, dbt_package_archive.ArchiveError, OSError, ValueError) as error:
         sys.stderr.write(f"registry: cannot run: {error}\n")
         return 2
     sys.stdout.write(render(result, arguments.release))

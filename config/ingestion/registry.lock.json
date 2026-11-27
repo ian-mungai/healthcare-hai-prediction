@@ -23,6 +23,14 @@
   },
   "files": [
     {
+      "path": "config/acquisition/ahrq_compendium_plan.json",
+      "sha256": "5c0266045d10e39e0c8029284fa91218ec8b25bccc3416275774c76199f77d40"
+    },
+    {
+      "path": "config/acquisition/ahrq_compendium_plan.lock.json",
+      "sha256": "7d43cfddd556889ba7c9444fbad6974f8688634785285b3d0e8f4888a34c93d0"
+    },
+    {
       "path": "config/acquisition/baseline_run/capture_specs.json",
       "sha256": "639eb2bb8df718bd6e2b702330655ae23d9f00de6eeddffbc872579bab12f463"
     },
@@ -127,6 +135,14 @@
       "sha256": "eccd2fb4690c44c61f0252bd561d639ceb4e0eb57d10a74e4f23c03e86a2a110"
     },
     {
+      "path": "config/acquisition/bls_api_plan.json",
+      "sha256": "bd0b18f05a7157c3a58708784a801a7e0f1b0e2b00e8271c0389692b3eb851b7"
+    },
+    {
+      "path": "config/acquisition/bls_api_plan.lock.json",
+      "sha256": "704774ed7d08c59b5031965693d2e2cee8d1ab865e49eb74dafa93a733613ce9"
+    },
+    {
       "path": "config/acquisition/bootstrap_seed/manifest.json",
       "sha256": "9fec40f5667031df98a065945811696429a4515f0ebe9a58f6c9a3f57df9fbed"
     },
@@ -155,6 +171,22 @@
       "sha256": "62f0b9125be0065bfb02c4eb1ea0e03c7262361d96ea59cb6eaff1dec505454b"
     },
     {
+      "path": "config/acquisition/census_acs_tables_plan.json",
+      "sha256": "cf64fd4aef8dbc9375626fd4703caafeef5d723fe6def37091e3771017da6280"
+    },
+    {
+      "path": "config/acquisition/census_acs_tables_plan.lock.json",
+      "sha256": "29f22a30ff08c9d8da58b9e0014e6bf704a0d94f0fe11b39d6ac49ce28fe2d4d"
+    },
+    {
+      "path": "config/acquisition/cms_owners_plan.json",
+      "sha256": "249a7f89b7a730cea8b67a32fe45289ff6de7b50f96b48f3980042b46765adea"
+    },
+    {
+      "path": "config/acquisition/cms_owners_plan.lock.json",
+      "sha256": "6e85fe01c37be19ead0cf248bb2013e3e4e0165cf54ab12ac96bab6d4f227360"
+    },
+    {
       "path": "config/acquisition/collection_layout.json",
       "sha256": "75b2b00de86aaf6bdaaa2d02f3f63c32780b632c1ef55a46feded356af62119b"
     },
@@ -167,8 +199,48 @@
       "sha256": "709d7e37cd57d47a40c9ab842a4a0f6b7ec267aa3e073098ec11d8a27ef0b0f3"
     },
     {
+      "path": "config/acquisition/hud_api_plan.json",
+      "sha256": "ac5afbb0d41040ad0391f2892c572b0eb82b249f37952f75fa4e945165f6e55d"
+    },
+    {
+      "path": "config/acquisition/hud_api_plan.lock.json",
+      "sha256": "b673f3bd1ee1c9ec643f32acf923b9a6f951ef9b72beb755111173c01b048cd2"
+    },
+    {
+      "path": "config/acquisition/hud_api_plan_2021q2_2025q4.json",
+      "sha256": "1d48cac81a65f9d42d9094227af76feb0a8f4ea6e9ac45aee3f424f383c0088b"
+    },
+    {
+      "path": "config/acquisition/hud_api_plan_2021q2_2025q4.lock.json",
+      "sha256": "8270e6ba98d6aa35b1e48a94a7c2386c5895cb5e24a5ad8be1ef1796db93e61b"
+    },
+    {
+      "path": "config/acquisition/hud_xlsx_plan_2010q1_2020q4.json",
+      "sha256": "cfdc80e12919ebb287df314f17b1ef988dfb1bb432207031484bf1ffb0670156"
+    },
+    {
+      "path": "config/acquisition/hud_xlsx_plan_2010q1_2020q4.lock.json",
+      "sha256": "d4f17218d5348b9d0996e2aa7302d522f7d4d9c903cb6ac620adf676375528ed"
+    },
+    {
+      "path": "config/acquisition/onc_mu_hospital_plan.json",
+      "sha256": "91602abe7e6182c2b33033734775fb188a4ec737f63b7ec999677e5e7c9870c7"
+    },
+    {
+      "path": "config/acquisition/onc_mu_hospital_plan.lock.json",
+      "sha256": "bb37302654296f9e16ff10a2424f45b113cfbe0640e1e332de4056121df16980"
+    },
+    {
       "path": "config/acquisition/source_registry.json",
       "sha256": "3fc70c48fd64ae66f2a43693b25cfa4e0efa8a5572db2a2789425a5693994995"
+    },
+    {
+      "path": "config/acquisition/wonder_export_plan.json",
+      "sha256": "a9f0aad69ce55c370ba59e8526e3f11136f5f9d2c99bbedeb965e3bb206dfc96"
+    },
+    {
+      "path": "config/acquisition/wonder_export_plan.lock.json",
+      "sha256": "7c8a48af54505f8a26611fc93a9155c0f5cb76c354fe0c098025677b60d04a2d"
     },
     {
       "path": "config/ingestion/collections.json",

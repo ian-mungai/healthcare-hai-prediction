@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition import completion_record
+from scripts.ingestion import registry
 from scripts.ingestion import registry_records as records
 from tests.registry_records_support import HPSA, completion, evidence_entry, iam_evidence, inventory, live_record, manual_record, retention_input
 from tests.support import check
 
 Path_ = tuple[Any, ...]
+SCHEMAS = records.Schemas(registry.ROOT)
 STOPS = ("failed", "owner_held", "pending_owner", "stale", "mismatched")
 ALLOW_EMPTY = frozenset({"supersedes", "member_chain", "other_objects", "manifests"})
 SENTINEL = "SENTINEL_INPUT_VALUE_7f3a"
@@ -113,7 +115,7 @@ class Kind:
 
 
 def schema_valid(name: str) -> Callable[[Path, Any], bool]:
-    return lambda root, document: not records.describe_errors(records.schema(name), document)
+    return lambda root, document: not SCHEMAS.errors(name, document)
 
 
 def distinct(rows: list[dict[str, Any]], key: str) -> bool:
@@ -122,7 +124,7 @@ def distinct(rows: list[dict[str, Any]], key: str) -> bool:
 
 def inventory_valid(root: Path, document: Any) -> bool:
     """The exact schema, distinct object and manifest identities and every object's manifest listed."""
-    if records.describe_errors(records.schema("inventory_record"), document):
+    if SCHEMAS.errors("inventory_record", document):
         return False
     manifests = {(row["key"], row["version_id"]) for row in document["manifests"]}
     linked = all((row["manifest_key"], row["manifest_version_id"]) in manifests for row in document["objects"])
@@ -131,11 +133,11 @@ def inventory_valid(root: Path, document: Any) -> bool:
 
 def listed_valid(name: str) -> Callable[[Path, Any], bool]:
     """The exact schema and distinct object identities, for the kinds that list objects under ``objects``."""
-    return lambda root, document: not records.describe_errors(records.schema(name), document) and distinct(document["objects"], "key")
+    return lambda root, document: not SCHEMAS.errors(name, document) and distinct(document["objects"], "key")
 
 
 def completion_valid(root: Path, document: Any) -> bool:
-    if records.describe_errors(records.schema("completion_record"), document):
+    if SCHEMAS.errors("completion_record", document):
         return False
     try:
         completion_record.check(document)
@@ -146,13 +148,13 @@ def completion_valid(root: Path, document: Any) -> bool:
     )
 
 
-def direct(shape: Callable[[Any], None]) -> Callable[[Path, Any], None]:
-    return lambda root, document: shape(document)
+def direct(shape: Callable[[Any, records.Schemas], None]) -> Callable[[Path, Any], None]:
+    return lambda root, document: shape(document, SCHEMAS)
 
 
 def evidence_shape(root: Path, document: Any) -> None:
     """The evidence file's notes: a refusal anywhere in them is a refusal of the file."""
-    notes = records.evidence_notes(root, document, frozenset({HPSA}))
+    notes = records.evidence_notes(root, document, frozenset({HPSA}), SCHEMAS)
     if any("refused" in note for note in notes):
         raise records.Refusal("; ".join(notes))
 
@@ -163,7 +165,7 @@ def evidence_base(root: Path) -> Any:
 
 def evidence_valid(root: Path, document: Any) -> bool:
     """The whole evidence file against its exact schema (envelope and entries), each pointed file present and no object identity twice."""
-    if records.describe_errors(records.schema("input_evidence"), document):
+    if SCHEMAS.errors("input_evidence", document):
         return False
     entries = document["tables"]
     pointed = [(root / row[part]["path"]).is_file() for row in entries for part in ("record", "live_check")]

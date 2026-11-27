@@ -1,28 +1,28 @@
-"""Shape checks for the files an owner may supply to the registry (design v4 section 5.1, evidence addendum rule P).
+"""Shape checks for the files an owner may supply to the registry (design v4 section 5.1).
 
 In step S4 no file closes or reduces a readiness item, so nothing here decides readiness. A supplied evidence entry, evidence record, live check, manual outcome
 record, retention input or IAM plan evidence is checked for its SHAPE only, and the report says ``shape accepted, not usable in this step`` or names the shape
 refusal. The checks keep the producing steps honest. They never raise on bad input and they print no input value: a refusal names a position (a path of
 schema-defined property names and array indexes) and the schema keyword that failed, never ``error.message``, an instance or a property name the schema does not
 define. The evidence rules that would let a file close an item (selection, identity, manifest, layout, one fact set, live coverage, closing status) are built
-later by the steps that produce real records: see design_v4_s4_evidence_addendum.md.
+later by the steps that produce real records. Every schema comes from the tree that is checked (:class:`Schemas`), never from the checker's own folder.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
-from functools import cache
+from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from scripts.acquisition import completion_record
 
-SCHEMAS = Path(__file__).resolve().parents[2] / "config/ingestion/schemas"
+SCHEMA_FOLDER = "config/ingestion/schemas"
+SCHEMA_SUFFIX = ".schema.json"
 ACCEPTED = "shape accepted, not usable in this step"
 
 
@@ -30,56 +30,79 @@ class Refusal(ValueError):
     """A shape refusal with a content-free reason."""
 
 
-@cache
-def schema_names() -> frozenset[str]:
-    """Every property name a registry schema defines: the only names a diagnostic may print."""
+def property_names(documents: Iterable[Any]) -> frozenset[str]:
+    """Every property name the schemas define: the only names a diagnostic may print."""
     found: set[str] = set()
-
-    def walk(node: Any) -> None:
+    pending = list(documents)
+    while pending:
+        node = pending.pop()
         if isinstance(node, dict):
-            found.update(node.get("properties", {}))
-            for value in node.values():
-                walk(value)
+            if isinstance(node.get("properties"), dict):
+                found.update(node["properties"])
+            pending.extend(node.values())
         elif isinstance(node, list):
-            for value in node:
-                walk(value)
-
-    for path in SCHEMAS.glob("*.schema.json"):
-        walk(json.loads(path.read_bytes()))
+            pending.extend(node)
     return frozenset(found)
 
 
-def position(error: ValidationError) -> str:
+def position(error: ValidationError, names: Collection[str]) -> str:
     """The path of a failure: array indexes and schema-defined names, with any other key printed as a placeholder."""
-    steps = [str(step) if isinstance(step, int) or step in schema_names() else "<key>" for step in error.absolute_path]
+    steps = [str(step) if isinstance(step, int) or step in names else "<key>" for step in error.absolute_path]
     return "/".join(steps) or "(document)"
 
 
-def describe(error: ValidationError) -> str:
+def describe(error: ValidationError, names: Collection[str]) -> str:
     """One failure as position and keyword, plus the missing required names the schema itself defines. Never the message, the instance or an input key."""
+    where = position(error, names)
+    if error.validator is None:
+        return f"{where}: the schema accepts nothing here"
     keyword = str(error.validator)
     if keyword == "required" and isinstance(error.validator_value, list):
         missing = [name for name in error.validator_value if isinstance(error.instance, dict) and name not in error.instance]
-        return f"{position(error)}: required {', '.join(name for name in missing if name in schema_names()) or 'property'} is missing"
+        return f"{where}: required {', '.join(name for name in missing if name in names) or 'property'} is missing"
     if keyword == "additionalProperties":
-        return f"{position(error)}: unknown property"
-    return f"{position(error)}: {keyword}"
+        return f"{where}: unknown property"
+    return f"{where}: {keyword}"
 
 
-def describe_errors(schema: Draft202012Validator, document: Any, limit: int = 3) -> list[str]:
-    """The first failures of a document against a schema, each content-free, in a stable order."""
-    found = sorted(schema.iter_errors(document), key=lambda error: [str(step) for step in error.absolute_path])
-    return [describe(error) for error in found[:limit]]
+class Schemas:
+    """The registry schemas of one tree, read once. Integrity and the shape checks validate against these and no others."""
+
+    def __init__(self, root: Path) -> None:
+        self.documents: dict[str, Any] = {}
+        # A file that is no JSON schema, by name, with why.
+        self.unusable: dict[str, str] = {}
+        for path in sorted((root / SCHEMA_FOLDER).glob(f"*{SCHEMA_SUFFIX}")):
+            name = path.name.removesuffix(SCHEMA_SUFFIX)
+            try:
+                document = json.loads(path.read_bytes())
+                Draft202012Validator.check_schema(document)
+            except (OSError, ValueError, RecursionError, SchemaError) as error:
+                self.unusable[name] = f"is not a usable JSON schema ({type(error).__name__})"
+                continue
+            self.documents[name] = document
+        self.names = property_names(self.documents.values())
+
+    def document(self, name: str) -> Any:
+        if name not in self.documents:
+            raise Refusal(f"the tree's {name} schema is missing or unusable")
+        return self.documents[name]
+
+    def errors_of(self, schema: Any, value: Any, limit: int = 3) -> list[str]:
+        """The first failures of a value against a schema, each content-free, in a stable order."""
+        try:
+            found = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda error: [str(step) for step in error.absolute_path])
+            return [describe(error, self.names) for error in found[:limit]]
+        except Exception as error:  # a missing or endless reference of a bound schema shows only here, as library errors of many types
+            return [f"(document): the schema cannot be evaluated ({type(error).__name__})"]
+
+    def errors(self, name: str, value: Any, limit: int = 3) -> list[str]:
+        return self.errors_of(self.document(name), value, limit)
 
 
-@cache
-def schema(name: str) -> Draft202012Validator:
-    return Draft202012Validator(json.loads((SCHEMAS / f"{name}.schema.json").read_bytes()))
-
-
-def require(name: str, document: Any, what: str) -> None:
+def require(name: str, document: Any, what: str, schemas: Schemas) -> None:
     """Raise the shape refusal of a document that does not match its exact schema."""
-    errors = describe_errors(schema(name), document)
+    errors = schemas.errors(name, document)
     if errors:
         raise Refusal(f"{what} does not match its schema: {'; '.join(errors)}")
 
@@ -113,9 +136,9 @@ def read(root: Path, relative: Any, what: str) -> bytes:
         raise Refusal(unreadable) from None
 
 
-def completion_shape(document: Any) -> None:
+def completion_shape(document: Any, schemas: Schemas) -> None:
     """A completion record: the exact types first, so the real contract check never meets a value of the wrong type, then the real contract check."""
-    require("completion_record", document, "the completion record")
+    require("completion_record", document, "the completion record", schemas)
     try:
         completion_record.check(document)
     except completion_record.RecordError:
@@ -124,9 +147,9 @@ def completion_shape(document: Any) -> None:
         unique([(item["key"], item["version_id"]) for item in document[group]], f"the completion record's {group}")
 
 
-def inventory_shape(document: Any) -> None:
+def inventory_shape(document: Any, schemas: Schemas) -> None:
     """An inventory record (design v4 section 7, version 1)."""
-    require("inventory_record", document, "the inventory record")
+    require("inventory_record", document, "the inventory record", schemas)
     unique([(item["object_key"], item["version_id"]) for item in document["objects"]], "the inventory record")
     unique([(item["key"], item["version_id"]) for item in document["manifests"]], "the inventory record's manifests")
     manifests = {(item["key"], item["version_id"]) for item in document["manifests"]}
@@ -134,90 +157,106 @@ def inventory_shape(document: Any) -> None:
         raise Refusal("the inventory record lists an object of a manifest it does not list")
 
 
-def manual_shape(document: Any) -> None:
+def manual_shape(document: Any, schemas: Schemas) -> None:
     """A manual outcome record, as S4 defined it. It is not a producer contract: the real stale record belongs to S9."""
-    require("manual_record", document, "the manual outcome record")
+    require("manual_record", document, "the manual outcome record", schemas)
     unique([(item["key"], item["version_id"]) for item in document["objects"]], "the manual outcome record")
 
 
-def live_shape(document: Any) -> None:
+def live_shape(document: Any, schemas: Schemas) -> None:
     """A live object check record, as S4 defined it. A failed result has a valid shape; it is reported as shape only."""
-    require("live_check", document, "the live check record")
+    require("live_check", document, "the live check record", schemas)
     unique([(item["key"], item["version_id"]) for item in document["objects"]], "the live check record")
 
 
-def retention_shape(document: Any) -> None:
-    require("retention_input", document, "the retention input")
+def retention_shape(document: Any, schemas: Schemas) -> None:
+    require("retention_input", document, "the retention input", schemas)
 
 
-def iam_shape(document: Any) -> None:
-    require("iam_plan_evidence", document, "the IAM plan evidence")
+def iam_shape(document: Any, schemas: Schemas) -> None:
+    require("iam_plan_evidence", document, "the IAM plan evidence", schemas)
 
 
 RECORD_SHAPES = {"unit_records": completion_shape, "inventory_record": inventory_shape, "manual_outcome": manual_shape}
+# What a check meets when a bound schema lets through a document it cannot read.
+UNREADABLE = (KeyError, TypeError, AttributeError, ValueError, RecursionError)
 
 
-def outcome(check: Any, document: Any) -> str:
+def outcome(check: Any, document: Any, schemas: Schemas) -> str:
     """The note of one shape check: accepted (and not usable) or the refusal's content-free reason."""
     try:
-        check(document)
+        check(document, schemas)
     except Refusal as refusal:
         return f"refused ({refusal})"
+    except UNREADABLE:
+        return "refused (it passes its schema and cannot be read as this record)"
     return ACCEPTED
 
 
-def file_outcome(root: Path, relative: Any, check: Any, what: str) -> str:
+def file_outcome(root: Path, relative: Any, check: Any, what: str, schemas: Schemas) -> str:
     """The note of one supplied file: read it, parse it and check its shape; no failure raises."""
     try:
-        return outcome(check, parse(read(root, relative, what), what))
+        return outcome(check, parse(read(root, relative, what), what), schemas)
     except Refusal as refusal:
         return f"refused ({refusal})"
 
 
-def evidence_envelope(document: Any) -> Any:
-    """The tables of a whole evidence file whose envelope (kind, version, candidate digest, no unknown property, a tables array) is exact, or a refusal."""
-    exact = json.loads((SCHEMAS / "input_evidence.schema.json").read_bytes())
-    exact["properties"]["tables"] = {"type": "array"}
-    errors = describe_errors(Draft202012Validator(exact), document)
+def evidence_envelope(document: Any, schemas: Schemas) -> tuple[list[Any], Any]:
+    """The tables of a whole evidence file whose envelope (kind, version, candidate digest, no unknown property, a tables array) is exact, with the bound
+    schema of one entry, or a refusal."""
+    bound = schemas.document("input_evidence")
+    try:
+        entry = bound["properties"]["tables"]["items"]
+        exact = {**bound, "properties": {**bound["properties"], "tables": {"type": "array"}}}
+    except (KeyError, TypeError):
+        raise Refusal("the tree's input_evidence schema describes no table entry") from None
+    errors = schemas.errors_of(exact, document)
     if errors:
         raise Refusal(f"it does not match its schema: {'; '.join(errors)}")
-    return document["tables"]
+    if not isinstance(document, dict) or not isinstance(document.get("tables"), list):
+        raise Refusal("it has no tables array")
+    return document["tables"], entry
 
 
-def evidence_file_notes(root: Path, relative: str, mapped: frozenset[str]) -> list[str]:
+def evidence_file_notes(root: Path, relative: str, mapped: frozenset[str], schemas: Schemas) -> list[str]:
     """Shape notes for the evidence file of a tree, read and parsed here. An empty evidence file (the committed one) has none."""
     try:
-        return evidence_notes(root, parse(read(root, relative, "it"), "it"), mapped)
+        return evidence_notes(root, parse(read(root, relative, "it"), "it"), mapped, schemas)
     except Refusal as refusal:
         return [f"shape: the evidence file: refused ({refusal})"]
 
 
-def evidence_notes(root: Path, document: Any, mapped: frozenset[str]) -> list[str]:
-    """Shape notes for a parsed evidence file: one for a refused envelope, or one for each entry."""
+def entry_notes(root: Path, name: str, row: Any, entry: Any, schemas: Schemas) -> list[str]:
+    """The shape notes of one evidence entry: one for a refused entry, or one for its record and one for its live check."""
+    errors = schemas.errors_of(entry, row)
+    if errors:
+        return [f"shape: evidence {name}: refused (the entry does not match its schema: {'; '.join(errors)})"]
+    if len({(item["key"], item["version_id"]) for item in row["objects"]}) != len(row["objects"]):
+        return [f"shape: evidence {name}: refused (an object identity appears more than once)"]
+    return [
+        f"shape: evidence {name}: record {file_outcome(root, row['record']['path'], RECORD_SHAPES[row['mode']], 'the evidence record', schemas)}",
+        f"shape: evidence {name}: live check {file_outcome(root, row['live_check']['path'], live_shape, 'the live check record', schemas)}",
+    ]
+
+
+def evidence_notes(root: Path, document: Any, mapped: frozenset[str], schemas: Schemas) -> list[str]:
+    """Shape notes for a parsed evidence file: one for a refused envelope, or the notes of each entry."""
     try:
-        tables = evidence_envelope(document)
+        tables, entry = evidence_envelope(document, schemas)
     except Refusal as refusal:
         return [f"shape: the evidence file: refused ({refusal})"]
-    if not tables:
-        return []
-    entry_schema = Draft202012Validator(json.loads((SCHEMAS / "input_evidence.schema.json").read_bytes())["properties"]["tables"]["items"])
     notes: list[str] = []
     for number, row in enumerate(tables):
         table = row.get("table") if isinstance(row, dict) else None
         name = table if isinstance(table, str) and table in mapped else f"entry {number}"
-        errors = describe_errors(entry_schema, row)
-        if errors:
-            notes.append(f"shape: evidence {name}: refused (the entry does not match its schema: {'; '.join(errors)})")
-            continue
-        if len({(item["key"], item["version_id"]) for item in row["objects"]}) != len(row["objects"]):
-            notes.append(f"shape: evidence {name}: refused (an object identity appears more than once)")
-            continue
-        notes.append(f"shape: evidence {name}: record {file_outcome(root, row['record']['path'], RECORD_SHAPES[row['mode']], 'the evidence record')}")
-        notes.append(f"shape: evidence {name}: live check {file_outcome(root, row['live_check']['path'], live_shape, 'the live check record')}")
+        try:
+            notes += entry_notes(root, name, row, entry, schemas)
+        except UNREADABLE:
+            notes.append(f"shape: evidence {name}: refused (the entry passes its schema and cannot be read as an evidence entry)")
     return notes
 
 
-def manual_notes(root: Path, document: Any) -> list[str]:
+def manual_notes(root: Path, document: Any, schemas: Schemas) -> list[str]:
     """One shape note for the manual outcome records the authored outcomes point at, counted by outcome."""
     if not isinstance(document, dict) or not isinstance(document.get("outcomes"), list):
         return []
@@ -226,22 +265,22 @@ def manual_notes(root: Path, document: Any) -> list[str]:
     ]
     if not pointers:
         return []
-    results = [file_outcome(root, path, manual_shape, "the manual outcome record") for path in pointers]
+    results = [file_outcome(root, path, manual_shape, "the manual outcome record", schemas) for path in pointers]
     refused = [result for result in results if result != ACCEPTED]
     text = f"shape: manual outcome records: {len(results) - len(refused)} {ACCEPTED}; {len(refused)} refused"
     return [text + (f" (for example {refused[0]})" if refused else "")]
 
 
-def r4_notes(root: Path, retention: str, iam: str) -> list[str]:
+def r4_notes(root: Path, retention: str, iam: str, schemas: Schemas) -> list[str]:
     """One shape note for each of the two R4 inputs that exists."""
     notes: list[str] = []
     for path, check in ((retention, retention_shape), (iam, iam_shape)):
         # A link that loops or points nowhere is a supplied file too, so presence is the entry and not what it leads to.
         if os.path.lexists(root / path):
-            notes.append(f"shape: {path}: {file_outcome(root, path, check, 'the file')}")
+            notes.append(f"shape: {path}: {file_outcome(root, path, check, 'the file', schemas)}")
     return notes
 
 
-def shape_notes(root: Path, evidence: str, manual: Any, mapped: frozenset[str], retention: str, iam: str) -> list[str]:
+def shape_notes(root: Path, evidence: str, manual: Any, mapped: frozenset[str], retention: str, iam: str, schemas: Schemas) -> list[str]:
     """Every shape note about the supplied files of a tree. None of them changes a readiness item."""
-    return evidence_file_notes(root, evidence, mapped) + manual_notes(root, manual) + r4_notes(root, retention, iam)
+    return evidence_file_notes(root, evidence, mapped, schemas) + manual_notes(root, manual, schemas) + r4_notes(root, retention, iam, schemas)

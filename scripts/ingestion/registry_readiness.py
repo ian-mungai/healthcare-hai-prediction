@@ -2,8 +2,8 @@
 
 THE RULE OF STEP S4 (``RULE`` below): no file of any kind closes or reduces a readiness item here. Evidence, a record, a live check, a manual outcome,
 a decision or state in ``collections.json``, a layout contract entry, a retention input and an IAM plan evidence file are at most reported as shape lines.
-Every open item names the step it waits for. The evidence checks that would let a file close an item (rules C1 to C8 of
-design_v4_s4_evidence_addendum.md) are built later, in the steps that produce real records.
+Every open item names the step it waits for. The evidence checks that would let a file close an item (selection, identity, manifest, layout, one fact set,
+live coverage and closing status) are built later, in the steps that produce real records.
 
 The split enforces the rule. :func:`obligations` makes every item and problem from the queue, the table map, the scope report and the computed facts,
 and takes no authored registry file. :func:`observations` reads the authored and supplied files and returns only lines that start with ``shape:``.
@@ -17,11 +17,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from scripts.ingestion import registry_records as records
-from scripts.ingestion.registry_model import MANUAL_ROUTE, Problem, Tree, default_scope
+from scripts.ingestion.registry_model import MANUAL_ROUTE, Problem, Tree
 
 RULE = (
     "Step S4 builds the integrity check and this report only. No file of any kind closes or reduces a readiness item: "
-    "the evidence checks wait for the steps that produce real records (design_v4_s4_evidence_addendum.md, rule P)."
+    "the checks that would let a supplied file close an item are built later, in the steps that produce real records."
 )
 DECISIONS = ("D1", "D2", "D3", "Q4")
 INTERIM_FIELDS = ("trigger", "follow_up", "accountable", "due")
@@ -107,7 +107,10 @@ def obligations(
         f"R1 usable-input evidence: {len(open_tables)} of {len(scope)} default-scope tables have none: {listing}; waiting for {WAIT_EVIDENCE}; "
         f"{by_selector} of them select by dataset ID or snapshot and wait for {WAIT_MANIFEST}"
     )
-    result.open("R2 evidence checks: not built in step S4, so run for no table; waiting for S9 and L3 (rules C1 to C8 of the evidence addendum)")
+    result.open(
+        "R2 evidence checks (selection, identity, manifest, layout, one fact set, live coverage, closing status): not built in step S4, so run for no table; "
+        "waiting for S9 and L3"
+    )
     result.open(
         f"R3 decisions and states: {', '.join(DECISIONS)}, the Q4 interim ({', '.join(INTERIM_FIELDS)}), the source states and the plan lifecycles stay open "
         "in this step; waiting for the owner (the decisions) and the lead (the Q4 interim, the source states and the plan lifecycles)",
@@ -167,7 +170,7 @@ def pending_states(tree: Tree) -> list[str]:
     return found
 
 
-def observations(tree: Tree, scope: Mapping[str, str]) -> list[str]:
+def observations(tree: Tree, scope: Mapping[str, str], schemas: records.Schemas) -> list[str]:
     """Shape lines about the authored and supplied files. Each starts with ``shape:`` and none of them changes a readiness item."""
     review = manual_review_sources(tree)
     contracts = tree.contracts.get("tables", {})
@@ -179,12 +182,4 @@ def observations(tree: Tree, scope: Mapping[str, str]) -> list[str]:
         f"{sum(1 for name in scope if name in contracts)}",
     ]
     mapped = frozenset(table["table"] for table in tree.tables)
-    return authored + records.shape_notes(tree.root, EVIDENCE_FILE, tree.manual, mapped, RETENTION_INPUT, IAM_EVIDENCE)
-
-
-def assess(tree: Tree, report: Mapping[str, Any], gaps: Sequence[Mapping[str, str]], facts: Mapping[str, Any] | None = None) -> Assessment:
-    """The readiness report of a tree: the obligations every tree has and the shape lines about the files it holds."""
-    scope = default_scope(report)
-    result = obligations(tree.units, tree.tables, scope, [gap["table"] for gap in gaps], (facts or {}).get("marked_outputs"))
-    result.notes = observations(tree, scope)
-    return result
+    return authored + records.shape_notes(tree.root, EVIDENCE_FILE, tree.manual, mapped, RETENTION_INPUT, IAM_EVIDENCE, schemas)

@@ -282,3 +282,89 @@ def test_the_lock_command_binds_an_evidence_file_it_cannot_parse(tmp_path: Path)
     replace(root, EVIDENCE, b"\xff")
     registry.write_lock(root, scope_report())
     check(not registry.lock_problems(root), "The lock does not bind the evidence bytes it was written from")
+
+
+LIVE_SCHEMA = "config/ingestion/schemas/live_check.schema.json"
+
+
+def supplied_evidence(root: Path, schema: bytes) -> registry.Result:
+    """A perfect evidence entry under a target tree whose live check schema is ``schema``, bound by the lock command, then the release check."""
+    replace(root, LIVE_SCHEMA, schema)
+    add_evidence(root, "cms_hai_hospital")
+    bind(root)
+    return registry.check(root, release=True, scope_report=scope_report(), skip=frozenset({"I6"}))
+
+
+def test_the_shape_checks_use_the_schemas_bound_under_the_root(tmp_path: Path) -> None:
+    """The target tree binds a live check schema that accepts nothing, so its live check record gets no shape acceptance."""
+    result = supplied_evidence(fresh_copy(tmp_path / "tree"), b"false\n")
+    live = [note for note in result.notes if "cms_hai_hospital: live check" in note]
+    check(len(live) == 1 and "refused" in live[0], f"The bound schema was ignored: {result.notes}")
+
+
+UNUSABLE_SCHEMAS = {
+    "not a schema": b'{"type": 5}\n',
+    "not JSON": b"{\n",
+    "a reference to nothing": b'{"$ref": "#/$defs/absent"}\n',
+    "a reference to itself": b'{"$ref": "#"}\n',
+}
+
+
+@pytest.mark.parametrize("name", list(UNUSABLE_SCHEMAS))
+def test_a_bound_schema_that_cannot_be_used_is_a_named_refusal_in_a_whole_report(tmp_path: Path, name: str) -> None:
+    """No traceback: the shape check refuses and, where the file is no schema at all, I2 names it. Readiness stays complete."""
+    result = supplied_evidence(fresh_copy(tmp_path / "tree"), UNUSABLE_SCHEMAS[name])
+    named = any(problem.predicate == "I2" and problem.subject == LIVE_SCHEMA for problem in result.problems)
+    refused = any("live check" in note and "refused" in note for note in result.notes)
+    check(named or refused, f"{name} was not refused by name: {result.problems[:3]} {result.notes}")
+    check(not any("live check" in note and "shape accepted" in note for note in result.notes), f"{name} was accepted: {result.notes}")
+    check(len(result.readiness) >= 9, f"{name} removed readiness items: {result.readiness}")
+
+
+DEEP_PATTERN = "(" * 750 + "x" + ")" * 750
+
+
+def deep_feed(root: Path) -> None:
+    edit_json(root, COLLECTIONS, lambda d: d["feeds"][0].update(name_regex=DEEP_PATTERN))
+
+
+def deep_match(root: Path) -> None:
+    edit_json(root, COLLECTIONS, lambda d: next(s for s in each_source(d) if s["acquisition"] == "closed_partial").update(match={"url_regex": DEEP_PATTERN}))
+
+
+def huge_repeat(root: Path) -> None:
+    edit_json(root, COLLECTIONS, lambda d: d["feeds"][0].update(name_regex="x{99999999999}"))
+
+
+@pytest.mark.parametrize("change", [deep_feed, deep_match, huge_repeat])
+def test_a_pattern_that_overflows_the_regex_compiler_is_a_named_i2_refusal(tmp_path: Path, change: Callable[[Path], None]) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    change(root)
+    bind(root)
+    code, text, _ = run_release(root, tmp_path)
+    check(code == 1 and "pattern is not a regular expression" in text and "I2 " in text, f"No named refusal: {code} {text[:600]}")
+    check("Traceback" not in text and "fail (102 problems)" in text, f"The report is not whole: {text[-300:]}")
+
+
+SUPPLIED_SCOPE = {
+    "a number": b"5",
+    "a null": b"null",
+    "an array": json.dumps([SENTINEL]).encode(),
+    "text that is not JSON": SENTINEL.encode(),
+    "nesting too deep to parse": b"[" * 100_000,
+}
+
+
+@pytest.mark.parametrize("command", ["check", "lock"])
+@pytest.mark.parametrize("name", list(SUPPLIED_SCOPE))
+def test_a_supplied_scope_report_that_is_no_json_object_is_a_named_i2_refusal(tmp_path: Path, name: str, command: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    report_file = tmp_path / "scope.json"
+    report_file.write_bytes(SUPPLIED_SCOPE[name])
+    before = (root / LOCK).read_bytes()
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main([command, "--root", str(root), "--scope-report", str(report_file)])
+    text = output.getvalue()
+    check(code == 1 and "I2 scope report: is not a JSON object" in text, f"{command} with {name}: {code} {text[:400]}")
+    check(SENTINEL not in text and (root / LOCK).read_bytes() == before, f"{command} printed the input or wrote the lock")

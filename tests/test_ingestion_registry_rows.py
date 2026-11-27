@@ -48,8 +48,8 @@ def test_an_added_removed_or_mistyped_field_in_an_authored_file_fails_i2(tmp_pat
 def test_authored_files_that_disagree_with_the_inputs_they_classify_fail_i2(tmp_path: Path) -> None:
     """I2: each way an authored file can disagree with the inputs it classifies fails and names the subject.
 
-    A decision reference that is not the registry's, a map collection or layout source with no record, an outcome set that is not the manual units,
-    a feed or gap for an unmapped table and a plan that is not on disk.
+    A decision reference that is not the registry's, a map collection or layout source with no record, an outcome set that is not the manual units
+    and a feed or gap for an unmapped table.
     """
     committed = json.loads((registry.ROOT / COLLECTIONS).read_bytes())
     first = committed["collections"][0]
@@ -69,7 +69,6 @@ def test_authored_files_that_disagree_with_the_inputs_they_classify_fail_i2(tmp_
         "outcome_unit": (OUTCOMES, lambda d: d["outcomes"].pop(), "outcome"),
         "feed_table": (COLLECTIONS, lambda d: d["feeds"].append({"table": "zz_none", "source_id": "ACS", "name_regex": "x"}), "zz_none"),
         "gap_table": (COLLECTIONS, lambda d: d["gaps"].update(zz_none={"class": "x", "step": "S9", "mode": "unit_records"}), "zz_none"),
-        "plan_path": (COLLECTIONS, lambda d: d["plans"].append({"path": "config/acquisition/none.json", "lifecycle": "retired"}), "none.json"),
     }
     for label, (path, change, word) in cases.items():
         root = fresh_copy(tmp_path / label)

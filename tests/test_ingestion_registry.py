@@ -5,11 +5,16 @@ Each case edits a copy of the committed inputs and runs the real check on it. No
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import shutil
+from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from scripts.ingestion import registry
 from tests.registry_support import append_text, edit_json, fresh_copy, replace, scope_report
@@ -24,6 +29,14 @@ NO_CLOSURES = frozenset({"I6"})
 def named(problems: list[registry.Problem], predicate: str) -> list[str]:
     """The subjects the check names for one predicate."""
     return sorted(problem.subject for problem in problems if problem.predicate == predicate)
+
+
+def command(arguments: list[str]) -> tuple[int, str]:
+    """The real command in this process: its exit code and everything it printed."""
+    output = io.StringIO()
+    with redirect_stdout(output), redirect_stderr(output):
+        code = registry.main(arguments)
+    return code, output.getvalue()
 
 
 def test_check_with_no_lock_fails_by_name(tmp_path: Path) -> None:
@@ -124,6 +137,12 @@ def test_an_edit_to_a_shared_closure_file_names_every_entry_point_that_runs_it(t
     check(len(named(result.problems, "I6")) == len(registry.ENTRY_POINTS), f"A shared file did not fail every entry point: {named(result.problems, 'I6')}")
 
 
+def version_hashes(version: Mapping[str, Any]) -> dict[str, str]:
+    """The path to SHA-256 map of one committed version, in either of the two forms the lists use."""
+    listed = version["code_sha256"]
+    return dict(listed) if isinstance(listed, dict) else {row["file"]: row["sha256"] for row in listed}
+
+
 def test_removing_only_the_workbook_entry_from_the_hud_list_fails_only_the_workbook(tmp_path: Path) -> None:
     """Case 4c: the HUD list serves two entry points; the position of the workbook closure is derived, never written here."""
     root = fresh_copy(tmp_path / "tree")
@@ -132,7 +151,7 @@ def test_removing_only_the_workbook_entry_from_the_hud_list_fails_only_the_workb
 
     workbook = closure_hashes("scripts.acquisition.store_hud_xlsx", root)
     document = json.loads(path.read_bytes())
-    listed = [version for version in document["versions"] if registry.version_hashes(version) != workbook]
+    listed = [version for version in document["versions"] if version_hashes(version) != workbook]
     check(len(listed) == len(document["versions"]) - 1, "The workbook closure was not exactly one listed version")
     document["versions"] = listed
     replace(root, "config/acquisition/hud_api_code_versions.json", (json.dumps(document, indent=2) + "\n").encode())
@@ -153,12 +172,14 @@ def test_the_entry_table_covers_exactly_the_version_lists_on_disk(tmp_path: Path
     check("wonder_export" in named(result.problems, "I6"), f"A missing version list was not named: {result.problems}")
 
 
-def test_a_seed_only_mode_that_the_manual_handler_does_not_name_is_a_seat_gap() -> None:
-    """I11 on the two seed-only modes: the manual handler and the seed-only list are their seats, so a mode one of them drops is named."""
+@pytest.mark.parametrize("seat", ["MODES (manual_content)", "SEED_ONLY_MODES"])
+def test_a_seed_only_mode_that_one_of_its_seats_does_not_name_is_a_seat_gap(seat: str) -> None:
+    """I11 on the two seed-only modes: the manual handler and the seed-only list are their seats, and each one that drops a mode is named on its own."""
     seats = registry.seat_membership()
-    seats["MODES (manual_content)"] = seats["MODES (manual_content)"] - {"hospital_archive"}
+    seats[seat] = seats[seat] - {"hospital_archive"}
     result = registry.check(registry.ROOT, scope_report=scope_report(), seats=seats, skip=NO_CLOSURES)
     check(named(result.problems, "I11") == ["hospital_archive"], f"I11 did not name the seed-only mode: {result.problems}")
+    check(result.seat_gaps["hospital_archive"] == [seat], f"The gap did not name the dropped seat alone: {result.seat_gaps}")
 
 
 def test_the_entry_table_agrees_with_the_existing_closure_cases() -> None:
@@ -191,9 +212,129 @@ def test_the_committed_golden_list_is_exactly_what_the_golden_command_writes(tmp
 
 
 def test_a_tree_with_no_dbt_project_cannot_run_the_check_and_exits_2(tmp_path: Path) -> None:
-    """With no supplied scope report the check parses the tree's own dbt project; a tree without one is an environment stop (exit 2)."""
+    """The check parses the tree's own dbt project; a tree without one is an environment stop (exit 2)."""
     root = fresh_copy(tmp_path / "tree")
+    shutil.rmtree(root / "dbt")
     errors = io.StringIO()
     with redirect_stderr(errors):
         code = registry.main(["check", "--root", str(root)])
     check(code == 2 and "cannot run" in errors.getvalue(), f"A tree with no dbt project did not stop with exit 2: {code} {errors.getvalue()!r}")
+
+
+def test_a_supplied_scope_report_that_differs_is_refused_by_both_commands_and_removes_no_readiness(tmp_path: Path) -> None:
+    """The scope comes from the tree's dbt project. A supplied report with a table moved out of scope (same map digest) is an I1 problem: the lock command
+    writes nothing and the release report keeps the table's R1 item."""
+    root = fresh_copy(tmp_path / "tree")
+    reduced = copy.deepcopy(scope_report())
+    row = next(row for row in reduced["in_scope"] if row["table"] == "cms_hai_hospital")
+    reduced["in_scope"].remove(row)
+    reduced["leaving"].append(row)
+    report_file = tmp_path / "reduced_scope.json"
+    report_file.write_bytes(registry.scope.report_bytes(reduced))
+    before = (root / LOCK).read_bytes()
+    code, text = command(["lock", "--root", str(root), "--scope-report", str(report_file)])
+    check(code == 1 and "I1 scope report" in text, f"The lock command took a reduced scope report: {code} {text}")
+    check((root / LOCK).read_bytes() == before, "The refused lock command wrote the lock")
+    code, text = command(["check", "--release", "--root", str(root), "--scope-report", str(report_file)])
+    check(code == 1 and "I1 scope report" in text, f"The check took a reduced scope report: {code} {text[-600:]}")
+    check("R1 cms_hai_hospital:" in text and "fail (102 problems)" in text, f"The reduced report removed readiness: {text[-600:]}")
+
+
+def drop_row(root: Path, name: str) -> None:
+    edit_json(root, LOCK, lambda lock: lock.update(files=[row for row in lock["files"] if row["path"] != name]))
+
+
+def delete_bound(name: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / name).unlink()
+
+    return change
+
+
+def delete_and_unlist(name: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / name).unlink()
+        drop_row(root, name)
+
+    return change
+
+
+def parent(**change: str) -> Callable[[Path], None]:
+    return lambda root: edit_json(root, LOCK, lambda lock: lock["parents"]["source_registry"].update(change))
+
+
+def second_row(digest: str | None) -> Callable[[Path], None]:
+    """A second row for the queue, in front of the real one, with a conflicting digest or (None) the same one."""
+
+    def change(root: Path) -> None:
+        edit_json(root, LOCK, lambda lock: lock["files"].insert(0, {"path": QUEUE, "sha256": digest or registry.lock_files(lock)[QUEUE]}))
+
+    return change
+
+
+ACTIVE_PLAN = "config/acquisition/census_acs_tables_plan.json"
+ACTIVE_LOCK = "config/acquisition/census_acs_tables_plan.lock.json"
+CLASSIFIED_LOCK = "config/acquisition/hcai_util_2018_2025_plan.lock.json"
+BROKEN_BINDINGS: dict[str, tuple[Callable[[Path], None], str]] = {
+    "the active Census plan deleted": (delete_bound(ACTIVE_PLAN), ACTIVE_PLAN),
+    "the active Census plan lock deleted and unlisted": (delete_and_unlist(ACTIVE_LOCK), ACTIVE_LOCK),
+    "a manual handler plan deleted and unlisted": (delete_and_unlist("config/acquisition/wonder_export_plan.json"), "wonder_export_plan.json"),
+    "a classified plan lock deleted and unlisted": (delete_and_unlist(CLASSIFIED_LOCK), CLASSIFIED_LOCK),
+    "a false source registry parent digest": (parent(sha256="0" * 64), "source registry parent"),
+    "a source registry parent with another path": (parent(path=QUEUE), "source registry parent"),
+    "a second queue row with a conflicting digest": (second_row("0" * 64), QUEUE),
+    "a second queue row with the same digest": (second_row(None), QUEUE),
+}
+
+
+@pytest.mark.parametrize("name", list(BROKEN_BINDINGS))
+def test_a_broken_lock_binding_is_an_i1_problem_that_names_it(tmp_path: Path, name: str) -> None:
+    change, subject = BROKEN_BINDINGS[name]
+    root = fresh_copy(tmp_path / "tree")
+    change(root)
+    result = registry.check(root, scope_report=scope_report(), skip=NO_CLOSURES)
+    found = [problem for problem in result.problems if problem.predicate == "I1"]
+    check(not result.ok and any(subject in str(problem) for problem in found), f"{name} was not named by I1: {result.problems}")
+
+
+@pytest.mark.parametrize("name", [ACTIVE_PLAN, ACTIVE_LOCK, CLASSIFIED_LOCK])
+def test_the_lock_command_refuses_a_tree_that_lacks_a_bound_plan_file_and_names_it(tmp_path: Path, name: str) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    (root / name).unlink()
+    before = (root / LOCK).read_bytes()
+    code, text = command(["lock", "--root", str(root)])
+    check(code == 2 and name in text, f"The lock command did not refuse the missing {name}: {code} {text}")
+    check((root / LOCK).read_bytes() == before, "The refused lock command wrote the lock")
+
+
+def classify_a_missing_plan(root: Path) -> None:
+    edit_json(root, COLLECTIONS, lambda d: d["plans"].append({"path": "config/acquisition/none.json", "lifecycle": "retired"}))
+
+
+def test_a_classified_plan_that_is_not_on_disk_stops_the_lock_command_by_name(tmp_path: Path) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    classify_a_missing_plan(root)
+    code, text = command(["lock", "--root", str(root)])
+    check(code == 2 and "config/acquisition/none" in text, f"A classified plan that is not on disk was locked: {code} {text}")
+
+
+def drop_an_outcome(root: Path) -> None:
+    edit_json(root, "config/ingestion/manual_outcomes.json", lambda d: d["outcomes"].pop(0))
+
+
+def add_a_field(root: Path) -> None:
+    edit_json(root, COLLECTIONS, lambda d: d["collections"][0].update(surprise=1))
+
+
+@pytest.mark.parametrize("draft", [drop_an_outcome, add_a_field])
+def test_an_incomplete_authored_draft_keeps_every_readiness_item(tmp_path: Path, draft: Callable[[Path], None]) -> None:
+    """Readiness comes from the queue, the map and the scope, so an authored file that fails I2 removes no item and no readiness problem."""
+    baseline = registry.check(fresh_copy(tmp_path / "committed"), release=True, scope_report=scope_report(), skip=NO_CLOSURES)
+    root = fresh_copy(tmp_path / "tree")
+    draft(root)
+    registry.write_lock(root, scope_report())
+    result = registry.check(root, release=True, scope_report=scope_report(), skip=NO_CLOSURES)
+    check(any(problem.predicate == "I2" for problem in result.problems), f"The draft was not named by I2: {result.problems}")
+    check(result.readiness == baseline.readiness and len(result.readiness) >= 9, f"The readiness items moved: {result.readiness}")
+    check(list(map(str, result.release_problems)) == list(map(str, baseline.release_problems)), "The readiness problems moved with an incomplete draft")
+    check(all(problem in result.problems for problem in result.release_problems), "check --release dropped readiness problems")

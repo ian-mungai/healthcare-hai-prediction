@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 COPIED = ("scripts", "config/ingestion")
 LINKED = ("config/acquisition", "config/lakehouse")
 LINKED_FOLDERS = ("baseline_run", "bootstrap_seed")
+# What the dbt parse of a tree reads: its dbt project and the locked package archive, which may not be reached through a link.
+PARSE_FOLDERS = ("dbt", "data/analytics/dbt/package_archive")
 
 
 def copy_inputs(destination: Path) -> Path:
@@ -27,6 +29,8 @@ def copy_inputs(destination: Path) -> Path:
     files except the two large folders no closure names, which are linked file by file."""
     for folder in (*COPIED, *LINKED):
         shutil.copytree(ROOT / folder, destination / folder, ignore=shutil.ignore_patterns("__pycache__", *LINKED_FOLDERS))
+    for folder in PARSE_FOLDERS:
+        shutil.copytree(ROOT / folder, destination / folder, ignore=shutil.ignore_patterns("__pycache__", "dbt_packages", "target", "logs"))
     for folder in LINKED_FOLDERS:
         for source in (ROOT / "config/acquisition" / folder).rglob("*"):
             if source.is_file():
@@ -71,7 +75,7 @@ def pristine_root() -> Path:
     """One copy of the inputs with a freshly written lock, made once per test run and removed when the run ends."""
     from scripts.ingestion import registry
 
-    folder = Path(tempfile.mkdtemp(prefix="hai_registry_pristine_"))
+    folder = Path(tempfile.mkdtemp(prefix="hai_registry_pristine_")).resolve()
     atexit.register(shutil.rmtree, folder, True)
     copy_inputs(folder)
     registry.write_lock(folder, scope_report())

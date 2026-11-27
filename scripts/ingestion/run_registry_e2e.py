@@ -1,7 +1,8 @@
 """End-to-end run of the registry check on the committed files and on one failing mutation per integrity row (design v4 step S4).
 
 Every run reads a copy of the committed inputs in a temporary folder, so the repository is never written. The committed files must pass ``check`` with no byte
-changed and fail ``check --release`` by name. Each mutation must make ``check`` exit 1 and name its subject. The record of the run is a JSON file.
+changed and fail ``check --release`` by name. Each mutation must make ``check`` exit 1 with one line that starts with its predicate and holds its subject. The
+record of the run is a JSON file.
 
     python -m scripts.ingestion.run_registry_e2e --out <record.json>
 """
@@ -27,6 +28,8 @@ from scripts.ingestion import registry, scope
 ROOT = registry.ROOT
 LINKED_FOLDERS = ("baseline_run", "bootstrap_seed")
 COPIED = ("scripts", "config/ingestion", "config/lakehouse", "config/acquisition")
+# What the dbt parse of a tree reads: its dbt project and the locked package archive, which may not be reached through a link.
+PARSE_FOLDERS = ("dbt", "data/analytics/dbt/package_archive")
 LOCK = registry.LOCK
 COLLECTIONS = registry.AUTHORED["collections"]
 GOLDEN = registry.AUTHORED["unit_golden"]
@@ -38,20 +41,26 @@ TABLE_MAP = registry.TABLE_MAP
 
 @dataclass(frozen=True)
 class Mutation:
-    """One failing edit: the integrity row it breaks, what it does, whether the lock is written again after it and the subject the check must name."""
+    """One failing edit: the integrity row it breaks, what it does, whether the lock is written again after it and the subject the check must name. The check
+    must print one line that starts with ``predicate`` (the row, unless another predicate reports it) and holds the subject, and ``also`` anywhere. A
+    ``supplied`` edit makes the scope report given to the check out of the derived one."""
 
     row: str
     label: str
     edit: Callable[[Path], None]
     subject: str
     relock: bool = False
-    rederive_scope: bool = False
+    predicate: str = ""
+    also: str = ""
+    supplied: Callable[[dict[str, Any]], Any] | None = None
 
 
 def copy_tree(destination: Path) -> Path:
     """The inputs the check reads as real files, except the two large folders no code closure names, which are linked file by file."""
     for folder in COPIED:
         shutil.copytree(ROOT / folder, destination / folder, ignore=shutil.ignore_patterns("__pycache__", *LINKED_FOLDERS))
+    for folder in PARSE_FOLDERS:
+        shutil.copytree(ROOT / folder, destination / folder, ignore=shutil.ignore_patterns("__pycache__", *registry.NOT_PARSE_INPUTS))
     for folder in LINKED_FOLDERS:
         for source in (ROOT / "config/acquisition" / folder).rglob("*"):
             if source.is_file():
@@ -98,6 +107,69 @@ def duplicate_table(root: Path) -> None:
     edit_json(root, TABLE_MAP, change)
 
 
+def move_out_of_scope(report: dict[str, Any]) -> dict[str, Any]:
+    """The report with one table moved to the leaving list and its map digest unchanged."""
+    changed = json.loads(scope.report_bytes(report))
+    row = next(row for row in changed["in_scope"] if row["table"] == "cms_hai_hospital")
+    changed["in_scope"].remove(row)
+    changed["leaving"].append(row)
+    return changed
+
+
+def unchanged(root: Path) -> None:
+    """No edit of the tree: the mutation is in the supplied report."""
+
+
+def delete_and_unlist(name: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / name).unlink()
+        edit_json(root, LOCK, lambda lock: lock.update(files=[row for row in lock["files"] if row["path"] != name]))
+
+    return change
+
+
+def binding_mutations() -> list[Mutation]:
+    """The broken scope, lock bindings, schemas and inputs that must each fail by name."""
+    plan = "config/acquisition/census_acs_tables_plan.json"
+    classified = "config/acquisition/hcai_util_2018_2025_plan.lock.json"
+    live_schema = f"{registry.SCHEMAS}/live_check.schema.json"
+    deep = "(" * 750 + "x" + ")" * 750
+    return [
+        Mutation("I1", "a supplied scope report moves a table out of scope", unchanged, "scope report", also="R1 usable-input", supplied=move_out_of_scope),
+        Mutation("I2", "a supplied scope report is a number", unchanged, "scope report", supplied=lambda report: 5),
+        Mutation("I1", "the active Census plan is deleted", lambda root: (root / plan).unlink(), plan),
+        Mutation("I1", "a classified plan's lock is deleted and unlisted", delete_and_unlist(classified), classified),
+        Mutation(
+            "I1",
+            "the source registry parent digest is false",
+            lambda root: edit_json(root, LOCK, lambda d: d["parents"]["source_registry"].update(sha256="0" * 64)),
+            "source registry parent",
+        ),
+        Mutation(
+            "I1",
+            "the queue is listed a second time with another digest",
+            lambda root: edit_json(root, LOCK, lambda d: d["files"].insert(0, {"path": QUEUE, "sha256": "0" * 64})),
+            f"{QUEUE}: is listed by the lock more than once",
+        ),
+        Mutation(
+            "I2",
+            "a manual outcome is removed",
+            lambda root: edit_json(root, OUTCOMES, lambda d: d["outcomes"].pop(0)),
+            "is a manual unit with no outcome",
+            relock=True,
+            also="open: R1 manual outcomes",
+        ),
+        Mutation("I2", "a bound shape schema is no schema", lambda root: replace(root, live_schema, b'{"type": 5}\n'), live_schema, relock=True),
+        Mutation(
+            "I2",
+            "a feed pattern overflows the regex compiler",
+            lambda root: edit_json(root, COLLECTIONS, lambda d: d["feeds"][0].update(name_regex=deep)),
+            "pattern is not a regular expression",
+            relock=True,
+        ),
+    ]
+
+
 def mutations() -> list[Mutation]:
     return [
         Mutation("lock", "no lock", lambda root: (root / LOCK).unlink(), LOCK),
@@ -123,7 +195,7 @@ def mutations() -> list[Mutation]:
             "the golden list lacks",
             relock=True,
         ),
-        Mutation("I4", "a second table selects the same files", duplicate_table, "zz_duplicate_hai", relock=True, rederive_scope=True),
+        Mutation("I4", "a second table selects the same files", duplicate_table, "zz_duplicate_hai", relock=True),
         Mutation(
             "I5",
             "a declared feed selects no table and is not a pinned gap",
@@ -147,7 +219,7 @@ def mutations() -> list[Mutation]:
             "I8",
             "a pinned gap carries an unknown migration label",
             lambda root: edit_json(root, LOCK, lambda d: d["pins"]["gaps"][0].update(step="S99")),
-            "cms_hospital_cost_reports_dictionaries",
+            "cms_hospital_cost_reports_dictionaries: has migration label 'S99'",
         ),
         Mutation(
             "I9",
@@ -164,6 +236,7 @@ def mutations() -> list[Mutation]:
             ),
             "cms_hai_hospital",
             relock=True,
+            predicate="I5",
         ),
         Mutation(
             "I11",
@@ -175,7 +248,7 @@ def mutations() -> list[Mutation]:
             "I8",
             "a pinned gap carries the nonexistent step S6",
             lambda root: edit_json(root, LOCK, lambda d: d["pins"]["gaps"][0].update(step="S6")),
-            "I8 cms_hospital_cost_reports_dictionaries",
+            "cms_hospital_cost_reports_dictionaries: has migration label 'S6'",
         ),
         Mutation(
             "I12",
@@ -184,6 +257,7 @@ def mutations() -> list[Mutation]:
             CONTRACTS,
             relock=True,
         ),
+        *binding_mutations(),
     ]
 
 
@@ -200,43 +274,44 @@ def file_digests(root: Path) -> dict[str, str]:
 
 
 def run_mutation(mutation: Mutation, report: dict[str, Any], scratch: Path) -> dict[str, Any]:
-    root = copy_tree(scratch / mutation.label.replace(" ", "_"))
-    use = report
+    name = mutation.label.replace(" ", "_")
+    root = copy_tree(scratch / name)
     mutation.edit(root)
-    if mutation.rederive_scope:
-        use, problems, _ = scope.scope_of_project(ROOT / "dbt", root / TABLE_MAP, ROOT)
-        if problems:
-            return {"row": mutation.row, "label": mutation.label, "passed": False, "error": problems}
-    report_file = scratch / f"report_{mutation.label.replace(' ', '_')}.json"
-    report_file.write_bytes(scope.report_bytes(use))
     if mutation.relock:
-        registry.write_lock(root, use)
-    code, text = run_command(["check", "--root", str(root), "--scope-report", str(report_file)])
-    named = mutation.subject in text
+        registry.write_lock(root)
+    arguments = ["check", "--root", str(root)]
+    if mutation.supplied:
+        report_file = scratch / f"report_{name}.json"
+        report_file.write_text(json.dumps(mutation.supplied(report)))
+        arguments += ["--scope-report", str(report_file)]
+    code, text = run_command(arguments)
+    predicate = mutation.predicate or mutation.row
     lines = text.splitlines()
-    shown = [line for line in lines if mutation.subject in line][:3] or lines[:3]
+    found = [line for line in lines if line.startswith(f"{predicate} ") and mutation.subject in line]
+    named = bool(found) and mutation.also in text
+    shutil.rmtree(root)
     return {
         "row": mutation.row,
         "label": mutation.label,
         "exit_code": code,
+        "predicate": predicate,
         "names": mutation.subject,
+        "also": mutation.also,
         "named": named,
         "passed": code == 1 and named,
-        "problems": [line[:260] for line in shown],
+        "problems": [line[:260] for line in (found or lines)[:3]],
     }
 
 
 def run(out: Path) -> dict[str, Any]:
     """The whole run: the committed files with and without ``--release``, then every mutation."""
-    scratch_root = Path(tempfile.mkdtemp(prefix="hai_registry_e2e_"))
+    scratch_root = Path(tempfile.mkdtemp(prefix="hai_registry_e2e_")).resolve()
     try:
-        report, problems, _ = scope.scope_of_project(ROOT / "dbt", ROOT / TABLE_MAP, ROOT)
-        if problems:
-            raise registry.RegistryFileError("; ".join(problems))
+        report = registry.derived_scope(ROOT)
         report_file = scratch_root / "scope_report.json"
         report_file.write_bytes(scope.report_bytes(report))
         before = file_digests(ROOT)
-        plain_code, plain = run_command(["check", "--scope-report", str(report_file)])
+        plain_code, plain = run_command(["check"])
         release_code, release = run_command(["check", "--release", "--scope-report", str(report_file)])
         record: dict[str, Any] = {
             "committed_files": {
