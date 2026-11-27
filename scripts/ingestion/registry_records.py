@@ -22,6 +22,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from scripts.acquisition import completion_record
+from scripts.acquisition.source_registry import unique_object
 from scripts.ingestion.registry_model import NEEDS
 
 SCHEMA_FOLDER = "config/ingestion/schemas"
@@ -113,7 +114,7 @@ class Schemas:
         for path in sorted((root / SCHEMA_FOLDER).glob(f"*{SCHEMA_SUFFIX}")):
             name = path.name.removesuffix(SCHEMA_SUFFIX)
             try:
-                document = json.loads(path.read_bytes())
+                document = json.loads(path.read_bytes(), object_pairs_hook=unique_object)
                 Draft202012Validator.check_schema(document)
             except Exception as error:  # a pattern the regex compiler cannot hold raises its own error, not a schema error
                 self.unusable[name] = f"is not a usable JSON schema ({type(error).__name__})"

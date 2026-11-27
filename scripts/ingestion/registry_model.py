@@ -34,8 +34,15 @@ _REFERENCE = {"anyOf": [{"type": "null"}, _record(source_id=_TEXT, sha256=_TEXT)
 _SOURCE = _record({"match": _mapping(_TEXT)}, source_id=_TEXT, acquisition=_TEXT, admission=_TEXT, scope=_TEXT, decision_ref=_REFERENCE)
 _LAYOUT = _record(id=_TEXT, columns_sha256=_TEXT, columns=_array(_TEXT))
 _FILE = _record(path=_TEXT, sha256=_TEXT)
-# What the readers of the lock and of each authored file need of it. A document is held to this after its bound schema, so a bound schema that allows more
-# gives a named refusal and never an unreadable value. These are not the schemas: they list only what the code reads.
+# The capture specification fields the queued outputs come from. The capture run's loader does not type them.
+_MEMBER = _record(role=_TEXT, dataset_id=_TEXT, member_chain={**_array(_TEXT), "minItems": 1})
+_TEMPLATE = {"anyOf": [{"type": "null"}, {"type": "object", "properties": {"role": {"type": ["string", "null"]}}}]}
+_SPEC = {
+    "type": "object",
+    "properties": {"stored_data_files": _array(_TEXT), "archive_members": {**_array(_MEMBER), "minItems": 1}, "receipt_template": _TEMPLATE},
+}
+# What the readers of the lock, of the capture specifications and of each authored file need of it. A document with a bound schema is held to this after it,
+# so a bound schema that allows more gives a named refusal and never an unreadable value. These are not the schemas: they list only what the code reads.
 NEEDS: dict[str, dict[str, Any]] = {
     "registry_lock": _record(
         {"decisions": _mapping(_ANY)},
@@ -60,6 +67,7 @@ NEEDS: dict[str, dict[str, Any]] = {
         gaps=_mapping(_record(step=_TEXT)),
         plans=_array(_record(path=_TEXT, lifecycle=_TEXT)),
     ),
+    "capture_specs": _record(specs=_mapping(_SPEC)),
     "manual_outcomes": _record(outcomes=_array(_record(unit=_TEXT))),
     "layout_contracts": _record(tables=_mapping(_record(consumer_columns={"anyOf": [{"const": "any"}, _array(_TEXT)]}, accepted_layouts=_array(_LAYOUT)))),
     "unit_golden": _record(

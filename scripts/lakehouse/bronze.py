@@ -44,6 +44,7 @@ from typing import Any, Protocol
 
 from orchestration.training_contract import run_id_pattern
 from scripts.acquisition.raw_root import RAW_ROOT, read_roots, strip_root
+from scripts.acquisition.source_registry import parse_json
 from scripts.lakehouse import bronze_consumer_columns, person_fields
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
@@ -192,8 +193,8 @@ class Storage(Protocol):
 
 
 def load_table_map(path: Path = TABLE_MAP) -> dict[str, Any]:
-    """Read and validate the table map: unique names, one selector per table and a supported format."""
-    config = json.loads(path.read_text())
+    """Read and validate the table map: each key once in an object, unique names, one selector per table and a supported format."""
+    config = parse_json(path.read_bytes(), path.name)
     names = [table["table"] for table in config["tables"]]
     if len(set(names)) != len(names):
         raise BronzeError("the table map repeats a table name")

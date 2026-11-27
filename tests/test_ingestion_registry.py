@@ -150,10 +150,10 @@ def test_a_json_object_that_repeats_a_key_is_refused_by_name(tmp_path: Path, rel
     if relative != LOCK:
         edit_json_digest(root, relative)
     code, output = command(["check", "--root", str(root)])
-    check(code == 1 and relative in output and "repeats a key" in output, f"The repeated key was accepted: {code} {output[:600]}")
+    check(code == 1 and relative in output and "Duplicate JSON key: step" in output, f"The repeated key was accepted: {code} {output[:600]}")
     if relative != LOCK:
         code, output = command(["lock", "--root", str(root)])
-        check(code == 2 and "repeats a key" in output, f"The lock command took a repeated key: {code} {output[:600]}")
+        check(code == 2 and "Duplicate JSON key: step" in output, f"The lock command took a repeated key: {code} {output[:600]}")
 
 
 def edit_json_digest(root: Path, relative: str) -> None:
@@ -389,3 +389,123 @@ def test_an_incomplete_authored_draft_keeps_every_readiness_item(tmp_path: Path,
     check(result.readiness == baseline.readiness and len(result.readiness) >= 9, f"The readiness items moved: {result.readiness}")
     check(list(map(str, result.release_problems)) == list(map(str, baseline.release_problems)), "The readiness problems moved with an incomplete draft")
     check(all(problem in result.problems for problem in result.release_problems), "check --release dropped readiness problems")
+
+
+LAYOUT = "config/acquisition/collection_layout.json"
+SPECS = "config/acquisition/baseline_run/capture_specs.json"
+QUEUE_LOCK = "config/acquisition/baseline_run/queue.lock.json"
+TABLE_MAP = "config/lakehouse/bronze_tables.json"
+
+
+def rewrite(root: Path, relative: str, old: str, new: str) -> None:
+    """Change the first place a file holds some text."""
+    text = (root / relative).read_text()
+    check(old in text, f"{relative} does not hold {old!r}")
+    replace(root, relative, text.replace(old, new, 1).encode())
+
+
+def second_dictionary_key(root: Path) -> list[str]:
+    """A second dictionary table that another root already requires: the parser would keep it and drop the real dictionary from the scope."""
+    real = '"table": "cms_hospital_cost_reports_dictionaries",\n        "file_pattern"'
+    rewrite(root, TABLE_MAP, real, real.replace('"file_pattern"', '"table": "cms_hospitals_dictionaries",\n        "file_pattern"'))
+    return [TABLE_MAP]
+
+
+def source_routed_twice(root: Path) -> list[str]:
+    edit_json(root, LAYOUT, lambda layout: layout["groups"][0]["source_ids"].append(layout["groups"][0]["source_ids"][0]))
+    return [LAYOUT]
+
+
+def queue_lock_count(root: Path) -> list[str]:
+    edit_json(root, QUEUE_LOCK, lambda lock: lock.update(entries=lock["entries"] + 1))
+    return [QUEUE_LOCK]
+
+
+def spec_field(change: Callable[[dict[str, Any]], object], held: str) -> Callable[[Path], list[str]]:
+    """Change the first capture specification that holds a non-empty field."""
+
+    def edit(root: Path) -> list[str]:
+        edit_json(root, SPECS, lambda document: change(next(spec for spec in document["specs"].values() if spec.get(held))))
+        return [SPECS]
+
+    return edit
+
+
+REFUSED_INPUTS: dict[str, tuple[Callable[[Path], list[str]], str]] = {
+    "a table map that repeats a dictionary table key": (second_dictionary_key, "Duplicate JSON key: table"),
+    "a source the layout routes twice": (source_routed_twice, "A source cannot route to multiple collections"),
+    "a queue lock with another entry count": (queue_lock_count, "Queue entries differ from its lock"),
+    "stored file names that are one string": (
+        spec_field(lambda spec: spec.update(stored_data_files=spec["stored_data_files"][0]), "stored_data_files"),
+        f"{SPECS} lacks the structure its reader needs",
+    ),
+    "an archive with an empty member list": (
+        spec_field(lambda spec: spec.update(archive_members=[]), "archive_members"),
+        f"{SPECS} lacks the structure its reader needs",
+    ),
+    "an archive member whose chain is one string": (
+        spec_field(lambda spec: spec["archive_members"][0].update(member_chain="a.csv"), "archive_members"),
+        f"{SPECS} lacks the structure its reader needs",
+    ),
+}
+
+
+def rebind_by_hand(root: Path, changed: list[str]) -> None:
+    """Write the lock rows of some files as a lock that accepted them would hold them."""
+
+    def change(lock: Any) -> None:
+        rows = {row["path"]: row["sha256"] for row in lock["files"]}
+        rows.update({name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in changed})
+        lock["files"] = [{"path": name, "sha256": digest} for name, digest in sorted(rows.items())]
+
+    edit_json(root, LOCK, change)
+
+
+def refused_by_both_commands(root: Path, changed: list[str], reason: str) -> str:
+    """The lock command writes nothing and names the reason; the check of a lock that binds the bytes anyway fails by the same reason."""
+    before = (root / LOCK).read_bytes()
+    code, output = command(["lock", "--root", str(root)])
+    check(code == 2 and reason in output and (root / LOCK).read_bytes() == before, f"The lock command took the input: {code} {output[:600]}")
+    rebind_by_hand(root, changed)
+    code, output = command(["check", "--release", "--root", str(root)])
+    check(code != 0 and reason in output, f"The check did not refuse the bound input: {code} {output[:900]}")
+    return output
+
+
+@pytest.mark.parametrize("name", list(REFUSED_INPUTS))
+def test_an_input_the_runtime_readers_refuse_is_refused_after_a_relock(tmp_path: Path, name: str) -> None:
+    """A new lock does not make a file pass that the pipeline's own readers cannot read, and no count is made from it."""
+    change, reason = REFUSED_INPUTS[name]
+    root = fresh_copy(tmp_path / "tree")
+    output = refused_by_both_commands(root, change(root), reason)
+    check("check --release: pass" not in output and "in dataset-ID collections" not in output, f"A count was made from a refused input: {output[:900]}")
+
+
+def test_a_bound_schema_that_repeats_a_key_is_unusable(tmp_path: Path) -> None:
+    """The parser keeps the last of two keywords, so a second one would open a schema that its first one closes."""
+    root = fresh_copy(tmp_path / "tree")
+    schema = "config/ingestion/schemas/collections.schema.json"
+    rewrite(root, schema, '\n  "additionalProperties": false,', '\n  "additionalProperties": false,\n  "additionalProperties": true,')
+    edit_json(root, COLLECTIONS, lambda document: document.update(surprise=1))
+    registry.write_lock(root, scope_report())
+    result = registry.check(root, scope_report=scope_report(), skip=NO_CLOSURES)
+    check(
+        any(problem.predicate == "I2" and problem.subject == schema and "not a usable" in problem.message for problem in result.problems), f"{result.problems}"
+    )
+
+
+@pytest.mark.parametrize("way", ["an absolute path", "a path through the parent folder", "a link out of the tree"])
+def test_a_classified_plan_outside_the_tree_is_refused_by_both_commands(tmp_path: Path, way: str) -> None:
+    """The lock names the files of the checked tree, so a classified plan and its lock are regular files inside it."""
+    root = fresh_copy(tmp_path / "tree")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for name in ("plan.json", "plan.lock.json"):
+        (outside / name).write_text("{}\n")
+    paths = {"an absolute path": str(outside / "plan.json"), "a path through the parent folder": "../outside/plan.json"}
+    plan = paths.get(way, "config/acquisition/linked_plan.json")
+    if way not in paths:
+        (root / plan).symlink_to(outside / "plan.json")
+        (root / registry.lock_of(plan)).symlink_to(outside / "plan.lock.json")
+    edit_json(root, COLLECTIONS, lambda document: document["plans"].append({"path": plan, "lifecycle": "retired"}))
+    refused_by_both_commands(root, [COLLECTIONS, plan, registry.lock_of(plan)], "is no readable file inside the tree")

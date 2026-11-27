@@ -48,8 +48,9 @@ from scripts.acquisition import (
 )
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
+from scripts.acquisition.collection_layout import collection_routes
 from scripts.acquisition.dataset_layout import source_folder
-from scripts.acquisition.source_registry import RegistryError
+from scripts.acquisition.source_registry import RegistryError, unique_object
 from scripts.infrastructure import startup_check
 from scripts.ingestion import registry_readiness, scope
 from scripts.ingestion import registry_records as records
@@ -160,18 +161,10 @@ def encode(document: Mapping[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
 
 
-def unrepeated(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """A JSON object with each key once: the parser would keep the last of two and hide the other."""
-    found = dict(pairs)
-    if len(found) != len(pairs):
-        raise ValueError("an object repeats a key")
-    return found
-
-
 def read_json(root: Path, relative: str) -> Any:
     """A file of the tree parsed as JSON; a missing, unreadable or malformed file, or one that repeats a key, is a RegistryFileError naming it."""
     try:
-        return json.loads((root / relative).read_bytes(), object_pairs_hook=unrepeated)
+        return json.loads((root / relative).read_bytes(), object_pairs_hook=unique_object)
     except OSError as error:
         raise RegistryFileError(f"{relative} cannot be read: {error.strerror or type(error).__name__}") from error
     except (ValueError, RecursionError) as error:
@@ -332,10 +325,18 @@ def draft_problems(root: Path, schemas: records.Schemas) -> list[Problem]:
 
 def load_queue(root: Path) -> Tree:
     """The queue, the capture specifications, the routes and the table map: what the queued outputs and their tables come from. Everything else stays empty.
-    A file that cannot be read raises RegistryFileError naming it."""
+    The capture run's loader and the layout's route check refuse here what they refuse in a run. A file that cannot be read raises RegistryFileError naming
+    it."""
     queue, specs = read_json(root, QUEUE), read_json(root, SPECS)
-    layout = read_json(root, LAYOUT)
-    routes = {source: f"{group['publisher']}/{group['collection']}" for group in layout["groups"] for source in group["source_ids"]}
+    # The loader reads the two paths only, so the other fields of a run stay empty.
+    capture_mode.load_inputs(
+        capture_mode.CaptureRun(root / QUEUE, root / SPECS, root="", run_id="", storage=None, scratch=root, code_sha256="", bundle_sha256="")
+    )
+    untyped = records.Schemas(root).needs_errors("capture_specs", specs)
+    if untyped:
+        raise RegistryFileError(f"{SPECS} {untyped[0]}")
+    found = collection_routes(read_json(root, SOURCE_REGISTRY), read_json(root, LAYOUT))
+    routes = {source: f"{route['publisher']}/{route['collection']}" for source, route in found.items()}
     return Tree(
         root=root,
         units=queue["queue"],
@@ -660,6 +661,17 @@ def pattern_error(pattern: str) -> str | None:
     return None
 
 
+def plan_problems(root: Path, plans: Iterable[Mapping[str, Any]]) -> list[Problem]:
+    """I2: each classified plan and its lock, with its path resolved, is a readable regular file inside the checked tree."""
+    problems: list[Problem] = []
+    for name in [path for plan in plans for path in (plan["path"], lock_of(plan["path"]))]:
+        try:
+            records.read(root, name, "a classified plan")
+        except records.Refusal:
+            problems.append(Problem("I2", name, "is a classified plan or its lock and is no readable file inside the tree"))
+    return problems
+
+
 def authored_problems(tree: Tree) -> list[Problem]:
     """I2 and I8: the authored files agree with the inputs they classify (map, layout, source registry, manual units) and with the lock."""
     problems: list[Problem] = []
@@ -724,7 +736,7 @@ def authored_problems(tree: Tree) -> list[Problem]:
     for name, record in tree.collections["decisions"].items():
         if recorded_decisions.get(name) != {"value": record["value"], "record_sha256": sha256_bytes(canonical(record))}:
             problems.append(Problem("I2", name, "is recorded in the lock differently from collections.json: regenerate the lock and review it"))
-    return problems
+    return problems + plan_problems(tree.root, tree.collections["plans"])
 
 
 AUTOMATIC_FORBIDDEN = frozenset({"held_access", "not_scheduled", "excluded", "manual"})
@@ -856,8 +868,8 @@ def scope_problems(report: Mapping[str, Any], lock: Mapping[str, Any]) -> list[P
 def readiness_of(root: Path, report: Mapping[str, Any], lock: Mapping[str, Any]) -> registry_readiness.Assessment | None:
     """The readiness report of a tree whose queue, table map and derived scope are the locked ones, or None. No other file and no other failure removes it.
 
-    The capture specifications and the collection layout give only the gaps and the marked outputs. Where they are not the locked ones or cannot be read, the
-    report says that these are not computed and keeps every item."""
+    The capture specifications and the collection layout give only the gaps and the marked outputs. Where they are not the locked ones, cannot be read or are
+    refused by their readers, the report says that these are not computed and keeps every item."""
     if scope_problems(report, lock) or not all(as_locked(root, lock, name) for name in (QUEUE, TABLE_MAP)):
         return None
     try:
@@ -925,6 +937,9 @@ def build_lock(root: Path, report: Mapping[str, Any]) -> dict[str, Any]:
         except (OSError, ValueError) as error:
             reason = getattr(error, "strerror", None) or type(error).__name__
             raise RegistryFileError(f"{name} is a bound file and cannot be read: {reason}") from error
+    outside = plan_problems(root, collections["plans"])
+    if outside:
+        raise RegistryFileError(str(outside[0]))
     draft = {"map_sha256": digest, "pins": {"map_sha256": digest, "gaps": [], "seat_gaps": {}}}
     tree = load_authored(load_inputs(root, draft))
     gaps = computed_gaps(tree, default_scope(report), selections(tree, unit_outputs(tree)))

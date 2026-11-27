@@ -194,6 +194,13 @@ def binding_mutations() -> list[Mutation]:
             "cms_hospital_cost_reports_dictionaries: is pinned more than once",
             also="cms_hospital_cost_reports_dictionaries: has migration label 'S99'",
         ),
+        Mutation(
+            "I2",
+            "a bound schema repeats a keyword",
+            lambda root: replace(root, live_schema, b'{"type": "object", "type": "array"}\n'),
+            f"{live_schema}: is not a usable JSON schema",
+            relock=True,
+        ),
         Mutation("I2", "a bound shape schema is no schema", lambda root: replace(root, live_schema, b'{"type": 5}\n'), live_schema, relock=True),
         Mutation(
             "I2",
